@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { deleteItem, fetchItem, updateItem } from '@/api/items'
+import { archiveItem, deleteItem, fetchItem, unarchiveItem, updateItem } from '@/api/items'
 import { listCategories } from '@/api/categories'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
 import ItemForm from '@/components/ItemForm.vue'
@@ -19,6 +19,7 @@ const categories = ref<Category[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const deleting = ref(false)
+const archiving = ref(false)
 const confirmOpen = ref(false)
 const error = ref('')
 
@@ -62,6 +63,26 @@ async function confirmDelete() {
   }
 }
 
+async function toggleArchive() {
+  if (!item.value) {
+    return
+  }
+  archiving.value = true
+  error.value = ''
+  try {
+    item.value = item.value.archived_at ? await unarchiveItem(itemId) : await archiveItem(itemId)
+    router.push(item.value.archived_at ? '/settings' : '/')
+  } catch (err) {
+    error.value = err instanceof Error
+      ? err.message
+      : item.value.archived_at
+        ? languageStore.t('unarchiveFailed')
+        : languageStore.t('archiveFailed')
+  } finally {
+    archiving.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -90,6 +111,9 @@ onMounted(load)
       />
 
       <div class="danger-zone">
+        <button class="button secondary" type="button" :disabled="archiving" @click="toggleArchive">
+          {{ item?.archived_at ? languageStore.t('unarchive') : languageStore.t('archive') }}
+        </button>
         <button class="button danger" type="button" @click="confirmOpen = true">
           {{ languageStore.t('deleteItem') }}
         </button>

@@ -94,14 +94,14 @@ onMounted(loadDashboard)
     <p v-if="error" class="error">{{ error }}</p>
     <div v-else-if="loading" class="loading">{{ languageStore.t('loading') }}</div>
 
-    <section v-else-if="items.length === 0" class="empty-state">
+    <section v-if="!loading && !error && items.length === 0" class="empty-state">
       <div>
         <p>{{ languageStore.t('emptyItems') }}</p>
         <RouterLink class="button" to="/items/new">{{ languageStore.t('createFirst') }}</RouterLink>
       </div>
     </section>
 
-    <section v-else-if="viewMode === 'all'" class="item-grid">
+    <section v-else-if="!loading && !error && viewMode === 'all'" class="item-grid">
       <ItemCard
         v-for="entry in items"
         :key="entry.item.id"
@@ -111,7 +111,7 @@ onMounted(loadDashboard)
       />
     </section>
 
-    <section v-else>
+    <section v-else-if="!loading && !error">
       <div v-for="group in groupedItems" :key="group.category.id" class="category-section">
         <div class="category-heading">
           <span

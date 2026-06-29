@@ -294,6 +294,54 @@ a {
   background: var(--category-color, var(--accent));
 }
 
+.achievement-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 76px;
+  min-height: 88px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 8px 8px 7px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.achievement-badge-image {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.14));
+}
+
+.achievement-badge-label {
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.achievement-badge.bronze {
+  border-color: rgba(180, 117, 67, 0.38);
+  background: rgba(180, 117, 67, 0.1);
+}
+
+.achievement-badge.silver {
+  border-color: rgba(100, 116, 139, 0.38);
+  background: rgba(100, 116, 139, 0.12);
+}
+
+.achievement-badge.gold {
+  border-color: rgba(234, 179, 8, 0.42);
+  background: rgba(234, 179, 8, 0.12);
+}
+
 .card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -373,6 +421,9 @@ a {
 }
 
 .danger-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 18px;
   padding-top: 18px;
   border-top: 1px solid var(--border);

@@ -1,8 +1,9 @@
 import { apiRequest } from './client'
-import type { Checkin, DashboardItem, Item, ItemPayload } from '@/types'
+import type { Badge, Checkin, CheckinPayload, DashboardItem, Item, ItemPayload, SharePayload } from '@/types'
 
-export function listItems() {
-  return apiRequest<Item[]>('/items')
+export function listItems(options: { archived?: boolean } = {}) {
+  const query = options.archived ? '?archived=true' : ''
+  return apiRequest<Item[]>(`/items${query}`)
 }
 
 export function createItem(payload: ItemPayload) {
@@ -29,13 +30,39 @@ export function deleteItem(id: number) {
   })
 }
 
+export function archiveItem(id: number) {
+  return apiRequest<Item>(`/items/${id}/archive`, {
+    method: 'PATCH',
+  })
+}
+
+export function unarchiveItem(id: number) {
+  return apiRequest<Item>(`/items/${id}/unarchive`, {
+    method: 'PATCH',
+  })
+}
+
+export function fetchItemBadges(id: number) {
+  return apiRequest<Badge[]>(`/items/${id}/badges`)
+}
+
+export function fetchItemShare(id: number) {
+  return apiRequest<SharePayload>(`/items/${id}/share`)
+}
+
 export function listCheckins(itemId: number) {
   return apiRequest<Checkin[]>(`/items/${itemId}/checkins`)
 }
 
-export function createCheckin(itemId: number, payload: { count?: number; note?: string } = {}) {
+export function createCheckin(itemId: number, payload: CheckinPayload = {}) {
   return apiRequest<DashboardItem>(`/items/${itemId}/checkins`, {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export function deleteCheckin(itemId: number, checkinId: number) {
+  return apiRequest<{ ok: boolean }>(`/items/${itemId}/checkins/${checkinId}`, {
+    method: 'DELETE',
   })
 }

@@ -8,6 +8,13 @@ import { useLanguageStore } from '@/stores/language'
 const props = defineProps<{
   values: HeatmapDay[]
   colorTheme: string
+  interactive?: boolean
+  clickableDates?: string[]
+  pendingDates?: string[]
+}>()
+
+const emit = defineEmits<{
+  dayClick: [day: HeatmapDay]
 }>()
 
 const languageStore = useLanguageStore()
@@ -15,6 +22,7 @@ const zhMonthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8
 const enMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const compactDayCount = 153
 const isCompact = ref(false)
+const selectedDay = ref<HeatmapDay | null>(null)
 let mediaQuery: MediaQueryList | null = null
 
 const monthNames = computed(() => (languageStore.preference === 'en' ? enMonthNames : zhMonthNames))
@@ -28,6 +36,14 @@ const visibleValues = computed(() => {
 })
 
 const valueMap = computed(() => new Map(visibleValues.value.map((day) => [day.date, day])))
+const clickableDateSet = computed(() => new Set(props.clickableDates ?? []))
+const pendingDateSet = computed(() => new Set(props.pendingDates ?? []))
+const selectedDayText = computed(() => {
+  if (!selectedDay.value) {
+    return ''
+  }
+  return dayText(selectedDay.value)
+})
 
 const spansMultipleYears = computed(() => {
   const firstValue = visibleValues.value[0]
@@ -113,6 +129,33 @@ function updateCompactMode(event: MediaQueryList | MediaQueryListEvent) {
   isCompact.value = event.matches
 }
 
+function canClick(day: HeatmapDay | null) {
+  return Boolean(day && props.interactive && clickableDateSet.value.has(day.date))
+}
+
+function handleDayClick(day: HeatmapDay | null) {
+  if (!day) {
+    return
+  }
+
+  if (!props.interactive) {
+    selectedDay.value = day
+    return
+  }
+
+  if (canClick(day) && !pendingDateSet.value.has(day.date)) {
+    emit('dayClick', day)
+  }
+}
+
+function dayText(day: HeatmapDay) {
+  return languageStore.t('heatmapTooltip', {
+    date: formatFullDisplayDate(day.date, languageStore.preference),
+    count: day.count,
+    completed: day.completed ? languageStore.t('heatmapCompletedSuffix') : '',
+  })
+}
+
 onMounted(() => {
   mediaQuery = window.matchMedia('(max-width: 640px)')
   updateCompactMode(mediaQuery)
@@ -143,20 +186,24 @@ onBeforeUnmount(() => {
             v-for="(day, dayIndex) in week"
             :key="`${weekIndex}-${dayIndex}`"
             class="heatmap-square"
-            :class="{ placeholder: !day }"
-            :title="
-              day
-                ? languageStore.t('heatmapTooltip', {
-                    date: formatFullDisplayDate(day.date, languageStore.preference),
-                    count: day.count,
-                    completed: day.completed ? languageStore.t('heatmapCompletedSuffix') : '',
-                  })
-                : ''
-            "
+            :class="{
+              placeholder: !day,
+              inspectable: day && !interactive,
+              clickable: canClick(day),
+              disabled: interactive && day && !canClick(day),
+              pending: day && pendingDateSet.has(day.date),
+              selected: day && selectedDay?.date === day.date,
+            }"
+            :title="day ? dayText(day) : ''"
             :style="{ backgroundColor: day ? heatmapLevelColor(colorTheme, day.level) : 'transparent' }"
+            @click="handleDayClick(day)"
           />
         </template>
       </div>
+    </div>
+
+    <div v-if="selectedDayText" class="heatmap-selection">
+      {{ selectedDayText }}
     </div>
   </div>
 </template>
@@ -203,7 +250,52 @@ onBeforeUnmount(() => {
   outline: 1px solid rgba(0, 0, 0, 0.02);
 }
 
+.heatmap-square.inspectable {
+  cursor: pointer;
+}
+
+.heatmap-square.inspectable:hover,
+.heatmap-square.selected {
+  outline: 1px solid color-mix(in srgb, var(--accent) 68%, transparent);
+}
+
+.heatmap-square.clickable {
+  cursor: pointer;
+  outline: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  transition:
+    transform 140ms ease,
+    outline-color 140ms ease,
+    opacity 140ms ease;
+}
+
+.heatmap-square.clickable:hover {
+  transform: scale(1.15);
+  outline-color: var(--accent);
+}
+
+.heatmap-square.disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.heatmap-square.pending {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .heatmap-square.placeholder {
   outline: none;
+}
+
+.heatmap-selection {
+  display: inline-flex;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 650;
 }
 </style>

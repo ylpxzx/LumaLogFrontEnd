@@ -1,23 +1,30 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { fetchBadges } from '@/api/dashboard'
 import { createCategory, deleteCategory, listCategories, updateCategory } from '@/api/categories'
+import { listItems, unarchiveItem } from '@/api/items'
 import DashboardViewModeToggle from '@/components/DashboardViewModeToggle.vue'
 import LanguageToggle from '@/components/LanguageToggle.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import ColorThemePicker from '@/components/ColorThemePicker.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLanguageStore } from '@/stores/language'
+import { badgeImage } from '@/utils/badgeImages'
 import { themeColor } from '@/utils/colors'
-import type { Category, DashboardViewMode } from '@/types'
+import { formatFullDisplayDate } from '@/utils/dates'
+import type { Badge, Category, DashboardViewMode, Item } from '@/types'
 
 const authStore = useAuthStore()
 const languageStore = useLanguageStore()
 const router = useRouter()
 
 const categories = ref<Category[]>([])
+const archivedItems = ref<Item[]>([])
+const badges = ref<Badge[]>([])
 const loading = ref(true)
 const saving = ref(false)
+const restoringId = ref<number | null>(null)
 const error = ref('')
 const newCategoryName = ref('')
 const newCategoryColor = ref('green')
@@ -27,6 +34,7 @@ const showCurrentStreak = ref(false)
 const showLongestStreak = ref(false)
 const showCompletionRate = ref(false)
 const showTotalCheckins = ref(false)
+const earnedBadges = computed(() => badges.value.filter((badge) => badge.earned))
 
 async function load() {
   loading.value = true
@@ -45,7 +53,14 @@ async function load() {
     showLongestStreak.value = user?.show_longest_streak ?? false
     showCompletionRate.value = user?.show_completion_rate ?? false
     showTotalCheckins.value = user?.show_total_checkins ?? false
-    categories.value = await listCategories(true)
+    const [categoryData, archivedData, badgeData] = await Promise.all([
+      listCategories(true),
+      listItems({ archived: true }),
+      fetchBadges(),
+    ])
+    categories.value = categoryData
+    archivedItems.value = archivedData
+    badges.value = badgeData
   } catch (err) {
     error.value = err instanceof Error ? err.message : languageStore.t('settingsLoadFailed')
   } finally {
@@ -117,6 +132,19 @@ async function removeCategory(category: Category) {
   }
 }
 
+async function restoreArchivedItem(item: Item) {
+  restoringId.value = item.id
+  error.value = ''
+  try {
+    await unarchiveItem(item.id)
+    archivedItems.value = archivedItems.value.filter((archived) => archived.id !== item.id)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : languageStore.t('unarchiveFailed')
+  } finally {
+    restoringId.value = null
+  }
+}
+
 function logout() {
   authStore.logout()
   router.push('/login')
@@ -140,8 +168,10 @@ onMounted(load)
     <section v-else class="settings-stack">
       <p v-if="error" class="error">{{ error }}</p>
 
-      <section class="form-panel">
-        <h2>{{ languageStore.t('display') }}</h2>
+      <details class="form-panel collapsible-panel">
+        <summary class="settings-summary">
+          <span>{{ languageStore.t('display') }}</span>
+        </summary>
         <div class="settings-row">
           <span>{{ languageStore.t('language') }}</span>
           <LanguageToggle />
@@ -154,10 +184,12 @@ onMounted(load)
           <span>{{ languageStore.t('dashboardMode') }}</span>
           <DashboardViewModeToggle :model-value="viewMode" @update:model-value="saveMode" />
         </div>
-      </section>
+      </details>
 
-      <section class="form-panel">
-        <h2>{{ languageStore.t('dashboardDisplayItems') }}</h2>
+      <details class="form-panel collapsible-panel">
+        <summary class="settings-summary">
+          <span>{{ languageStore.t('dashboardDisplayItems') }}</span>
+        </summary>
         <div class="toggle-grid">
           <label class="checkbox-row">
             <input v-model="showTodayStatus" type="checkbox" @change="saveStatsVisibility" />
@@ -180,10 +212,30 @@ onMounted(load)
             {{ languageStore.t('totalCheckins') }}
           </label>
         </div>
-      </section>
+      </details>
 
       <section class="form-panel">
-        <h2>{{ languageStore.t('categories') }}</h2>
+        <h2>{{ languageStore.t('earnedBadges') }}</h2>
+        <div v-if="earnedBadges.length > 0" class="settings-badge-list">
+          <span
+            v-for="badge in earnedBadges"
+            :key="badge.id"
+            class="achievement-badge"
+            :class="badge.level"
+            :title="badge.description"
+          >
+            <img class="achievement-badge-image" :src="badgeImage(badge.id)" :alt="badge.title" />
+            <span class="achievement-badge-label">{{ badge.title }}</span>
+          </span>
+        </div>
+        <div v-else class="settings-empty">{{ languageStore.t('noEarnedBadges') }}</div>
+      </section>
+
+      <details class="form-panel collapsible-panel">
+        <summary class="settings-summary">
+          <span>{{ languageStore.t('categories') }}</span>
+          <small>{{ categories.length }}</small>
+        </summary>
         <form class="category-create" @submit.prevent="addCategory">
           <input
             v-model="newCategoryName"
@@ -225,7 +277,43 @@ onMounted(load)
             </div>
           </article>
         </div>
-      </section>
+      </details>
+
+      <details class="form-panel collapsible-panel">
+        <summary class="settings-summary">
+          <span>{{ languageStore.t('archivedItems') }}</span>
+          <small>{{ archivedItems.length }}</small>
+        </summary>
+        <div v-if="archivedItems.length === 0" class="settings-empty">
+          {{ languageStore.t('archivedEmpty') }}
+        </div>
+        <div v-else class="archive-list">
+          <article v-for="item in archivedItems" :key="item.id" class="archive-item">
+            <div>
+              <strong>{{ item.name }}</strong>
+              <small>
+                {{ item.category_name ? languageStore.categoryName(item.category_name) : languageStore.t('uncategorized') }}
+                <span v-if="item.archived_at">
+                  · {{ formatFullDisplayDate(item.archived_at.slice(0, 10), languageStore.preference) }}
+                </span>
+              </small>
+            </div>
+            <div class="topbar-actions">
+              <RouterLink class="button secondary" :to="`/items/${item.id}/edit`">
+                {{ languageStore.t('editItemTitle') }}
+              </RouterLink>
+              <button
+                class="button"
+                type="button"
+                :disabled="restoringId === item.id"
+                @click="restoreArchivedItem(item)"
+              >
+                {{ languageStore.t('unarchive') }}
+              </button>
+            </div>
+          </article>
+        </div>
+      </details>
 
       <section class="form-panel">
         <h2>{{ languageStore.t('account') }}</h2>
@@ -276,12 +364,19 @@ h2 {
   gap: 6px 16px;
 }
 
+.settings-badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .category-list {
   display: grid;
   gap: 10px;
 }
 
-.category-item {
+.category-item,
+.archive-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -297,13 +392,70 @@ h2 {
   gap: 9px;
 }
 
-.category-item small {
+.category-item small,
+.archive-item small {
   color: var(--muted);
+}
+
+.archive-list {
+  display: grid;
+  gap: 10px;
+}
+
+.collapsible-panel {
+  display: block;
+}
+
+.settings-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 20px;
+  font-weight: 760;
+  list-style: none;
+}
+
+.settings-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-summary::after {
+  color: var(--muted);
+  content: '+';
+  font-size: 20px;
+  font-weight: 520;
+}
+
+.collapsible-panel[open] .settings-summary {
+  margin-bottom: 14px;
+}
+
+.collapsible-panel[open] .settings-summary::after {
+  content: '-';
+}
+
+.settings-summary small {
+  margin-left: auto;
+  margin-right: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.archive-item > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-empty {
+  color: var(--muted);
+  font-size: 14px;
 }
 
 @media (max-width: 720px) {
   .settings-row,
-  .category-item {
+  .category-item,
+  .archive-item {
     align-items: flex-start;
     flex-direction: column;
   }

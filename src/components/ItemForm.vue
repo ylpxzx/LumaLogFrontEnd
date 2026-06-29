@@ -31,6 +31,8 @@ const form = reactive({
   time_mode: 'all_day' as TimeMode,
   valid_start_time: '09:00',
   valid_end_time: '23:59',
+  allow_makeup: false,
+  makeup_monthly_limit: 3,
   allow_extra_checkins: false,
   show_on_dashboard: true,
 })
@@ -52,6 +54,8 @@ watch(
     form.time_mode = item?.time_mode ?? 'all_day'
     form.valid_start_time = item?.valid_start_time || '09:00'
     form.valid_end_time = item?.valid_end_time || '23:59'
+    form.allow_makeup = item?.allow_makeup ?? false
+    form.makeup_monthly_limit = item?.makeup_monthly_limit ?? 3
     form.allow_extra_checkins = item?.allow_extra_checkins ?? false
     form.show_on_dashboard = item?.show_on_dashboard ?? true
   },
@@ -71,6 +75,8 @@ function submit() {
     time_mode: form.time_mode,
     valid_start_time: form.time_mode === 'time_range' ? form.valid_start_time : '',
     valid_end_time: form.time_mode === 'time_range' ? form.valid_end_time : '',
+    allow_makeup: form.allow_makeup,
+    makeup_monthly_limit: form.allow_makeup ? Math.max(0, Number(form.makeup_monthly_limit)) : 0,
     allow_extra_checkins: form.allow_extra_checkins,
     show_on_dashboard: form.show_on_dashboard,
   })
@@ -154,6 +160,18 @@ function submit() {
         <input v-model="form.allow_extra_checkins" type="checkbox" />
         {{ languageStore.t('allowExtraCheckins') }}
       </label>
+
+      <label class="checkbox-row">
+        <input v-model="form.allow_makeup" type="checkbox" />
+        {{ languageStore.t('allowMakeup') }}
+      </label>
+
+      <template v-if="form.allow_makeup">
+        <label class="field">
+          <span>{{ languageStore.t('makeupMonthlyLimit') }}</span>
+          <input v-model.number="form.makeup_monthly_limit" class="input" min="0" type="number" />
+        </label>
+      </template>
 
       <label class="checkbox-row">
         <input v-model="form.show_on_dashboard" type="checkbox" />

@@ -65,7 +65,7 @@ export interface Item {
   valid_start_time: string
   valid_end_time: string
   allow_makeup: boolean
-  makeup_limit_days: number
+  makeup_monthly_limit: number
   allow_extra_checkins: boolean
   show_on_dashboard: boolean
   sort_order: number
@@ -123,7 +123,7 @@ export interface ItemPayload {
   valid_start_time?: string
   valid_end_time?: string
   allow_makeup?: boolean
-  makeup_limit_days?: number
+  makeup_monthly_limit?: number
   allow_extra_checkins?: boolean
   show_on_dashboard?: boolean
   sort_order?: number
@@ -146,4 +146,27 @@ export interface Checkin {
   note: string
   source: string
   created_at: string
+}
+
+export interface CheckinPayload {
+  count?: number
+  note?: string
+  source?: 'normal' | 'makeup'
+  checkin_date?: string
+}
+
+export interface Badge {
+  id: string
+  title: string
+  description: string
+  level: 'bronze' | 'silver' | 'gold' | string
+  earned: boolean
+}
+
+export interface SharePayload {
+  item: Item
+  stats: ItemStats
+  heatmap: HeatmapDay[]
+  today_count: number
+  badges: Badge[]
 }

@@ -8,6 +8,7 @@ const props = defineProps<{
   todayCount: number
   target: number
   loading?: boolean
+  forceEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -18,7 +19,7 @@ const languageStore = useLanguageStore()
 
 function canClick() {
   return (
-    !props.loading && (props.status === 'available' || props.status === 'completed_can_continue')
+    !props.loading && (props.forceEnabled || props.status === 'available' || props.status === 'completed_can_continue')
   )
 }
 </script>

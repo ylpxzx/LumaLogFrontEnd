@@ -1,6 +1,10 @@
 import { apiRequest } from './client'
-import type { DashboardResponse } from '@/types'
+import type { Badge, DashboardResponse } from '@/types'
 
 export function fetchDashboard() {
   return apiRequest<DashboardResponse>('/dashboard')
+}
+
+export function fetchBadges() {
+  return apiRequest<Badge[]>('/badges')
 }

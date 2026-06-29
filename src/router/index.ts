@@ -31,6 +31,11 @@ const router = createRouter({
       component: () => import('@/views/ItemCheckinView.vue'),
     },
     {
+      path: '/items/:id/makeup',
+      name: 'item-makeup',
+      component: () => import('@/views/ItemMakeupView.vue'),
+    },
+    {
       path: '/items/:id/edit',
       name: 'item-edit',
       component: () => import('@/views/ItemEditView.vue'),
