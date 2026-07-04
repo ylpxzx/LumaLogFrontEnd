@@ -52,6 +52,7 @@ const selectedDayText = computed(() => {
   }
   return dayText(selectedDay.value)
 })
+const selectedDayLines = computed(() => selectedDayText.value.split('\n').filter(Boolean))
 
 const spansMultipleYears = computed(() => {
   const firstValue = visibleValues.value[0]
@@ -218,8 +219,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="selectedDayText" class="heatmap-selection">
-      {{ selectedDayText }}
+    <div v-if="selectedDayLines.length > 0" class="heatmap-selection">
+      <span
+        v-for="(line, index) in selectedDayLines"
+        :key="`${line}-${index}`"
+        :class="{ 'is-note': index > 0 }"
+      >
+        {{ line }}
+      </span>
     </div>
   </div>
 </template>
@@ -332,7 +339,10 @@ onBeforeUnmount(() => {
 }
 
 .heatmap-selection {
-  display: inline-flex;
+  display: grid;
+  width: fit-content;
+  max-width: 100%;
+  gap: 3px;
   margin-top: 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -341,5 +351,13 @@ onBeforeUnmount(() => {
   padding: 6px 8px;
   font-size: 12px;
   font-weight: 650;
+  line-height: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.heatmap-selection .is-note {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-weight: 500;
 }
 </style>

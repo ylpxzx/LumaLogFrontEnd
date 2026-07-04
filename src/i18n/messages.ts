@@ -1,6 +1,9 @@
 export const messages = {
   zh: {
     appName: 'LumaLog',
+    checkinNote: '备注',
+    checkinNotePlaceholder: '记录今天的感受（可选）',
+    checkinNoteDetail: '{note}',
     settings: '设置',
     backHome: '返回首页',
     backCheckin: '返回签到',
@@ -216,6 +219,9 @@ export const messages = {
   },
   en: {
     appName: 'LumaLog',
+    checkinNote: 'Note',
+    checkinNotePlaceholder: 'Add a note for today (optional)',
+    checkinNoteDetail: 'Note: {note}',
     settings: 'Settings',
     backHome: 'Home',
     backCheckin: 'Back to check-in',

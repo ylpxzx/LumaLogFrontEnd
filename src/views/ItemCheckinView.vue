@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { createCheckin, fetchItem, listCheckins } from '@/api/items'
 import CheckinButton from '@/components/CheckinButton.vue'
@@ -8,6 +8,7 @@ import LumaIconBadge from '@/components/LumaIconBadge.vue'
 import SvgIcon from '@/components/SvgIcon.vue'
 import type { MessageKey } from '@/i18n/messages'
 import { useLanguageStore } from '@/stores/language'
+import { useThemeStore } from '@/stores/theme'
 import { badgeImage } from '@/utils/badgeImages'
 import { heatmapLevelColor, rgbaFromHex, themeColor } from '@/utils/colors'
 import { formatDate, formatFullDisplayDate, parseLocalDate, todayString } from '@/utils/dates'
@@ -23,13 +24,16 @@ import starIcon from '@/assets/svg/star.svg?raw'
 const route = useRoute()
 const router = useRouter()
 const languageStore = useLanguageStore()
+const themeStore = useThemeStore()
 const itemId = Number(route.params.id)
+const checkinNoteMaxLength = 200
 
 const entry = ref<DashboardItem | null>(null)
 const loading = ref(true)
 const checking = ref(false)
 const error = ref('')
 const checkins = ref<Checkin[]>([])
+const checkinNote = ref('')
 const badges = ref<Badge[]>([])
 const sharing = ref(false)
 const sharePickerOpen = ref(false)
@@ -40,6 +44,11 @@ const item = computed(() => entry.value?.item)
 const earnedBadges = computed(() => badges.value.filter((badge) => badge.earned))
 const accent = computed(() => (item.value ? themeColor(item.value.color_theme) : '#22c55e'))
 const today = computed(() => todayString())
+const todayTarget = computed(() => Math.max(item.value?.daily_target_count ?? 1, 1))
+const todayCount = computed(() => Math.min(entry.value?.today_count ?? 0, todayTarget.value))
+const showCheckinNoteInput = computed(() =>
+  Boolean(entry.value && todayCount.value < todayTarget.value),
+)
 const checkinsByDate = computed(() => {
   const result = new Map<string, Checkin[]>()
   checkins.value.forEach((record) => {
@@ -68,12 +77,21 @@ const heatmapDayLabels = computed(() => {
           : hasNormal
             ? languageStore.t('normalCheckin')
             : ''
+    const note = latestNote(records)
+    const parts: string[] = []
     if (sourceLabel) {
-      labels[day.date] = `${dayText(day)} / ${sourceLabel}`
+      parts.push(`${dayText(day)} / ${sourceLabel}`)
+    }
+    if (note) {
+      parts.push(languageStore.t('checkinNoteDetail', { note }))
+    }
+    if (parts.length > 0) {
+      labels[day.date] = parts.join('\n')
     }
   })
   return labels
 })
+const todayNote = computed(() => latestNoteForDate(checkins.value, today.value))
 const zhMonthNames = [
   '1月',
   '2月',
@@ -129,8 +147,15 @@ const shareTemplateOptions: Array<{ id: ShareTemplate; labelKey: MessageKey }> =
 ]
 
 const sharePreviewStats = Array.from({ length: 4 }, (_, index) => index)
-const sharePreviewBadges = Array.from({ length: 3 }, (_, index) => index)
 const sharePreviewFooterBlocks = Array.from({ length: 5 }, (_, index) => index)
+
+watch(
+  todayNote,
+  (note) => {
+    checkinNote.value = note
+  },
+  { immediate: true },
+)
 
 async function load() {
   loading.value = true
@@ -151,7 +176,7 @@ async function checkin() {
   checking.value = true
   error.value = ''
   try {
-    entry.value = await createCheckin(itemId)
+    entry.value = await createCheckin(itemId, { note: checkinNote.value.trim() })
     checkins.value = await listCheckins(itemId)
     badges.value = itemBadges(entry.value.stats)
   } catch {
@@ -159,6 +184,29 @@ async function checkin() {
   } finally {
     checking.value = false
   }
+}
+
+function updateCheckinNote(event: Event) {
+  const input = event.target as HTMLTextAreaElement
+  const value = input.value.slice(0, checkinNoteMaxLength)
+  checkinNote.value = value
+  if (input.value !== value) {
+    input.value = value
+  }
+}
+
+function latestNoteForDate(records: Checkin[], date: string) {
+  return latestNote(records.filter((record) => record.checkin_date === date))
+}
+
+function latestNote(records: Checkin[]) {
+  for (const record of [...records].sort((left, right) => right.id - left.id)) {
+    const note = (record.note ?? '').trim()
+    if (note) {
+      return note
+    }
+  }
+  return ''
 }
 
 function dayText(day: HeatmapDay) {
@@ -308,11 +356,60 @@ function sharePreviewLevel(index: number, template: ShareTemplate) {
   return 0
 }
 
+function isDarkShareCanvas() {
+  return document.documentElement.dataset.theme === 'dark'
+}
+
+function shareCanvasDividerColor(lightColor: string) {
+  return isDarkShareCanvas() ? '#2b384a' : lightColor
+}
+
+function shareCanvasPalette(accent: string, template: ShareTemplate) {
+  const isDark = isDarkShareCanvas()
+  const lightBg: Record<ShareTemplate, string> = {
+    classic: '#f7f8fa',
+    poster: '#fbfcfb',
+    zen: '#f5f7f8',
+    dashboard: '#f5f8fb',
+  }
+  const lightCard: Record<ShareTemplate, string> = {
+    classic: '#ffffff',
+    poster: '#fbfffc',
+    zen: '#fbfffc',
+    dashboard: '#ffffff',
+  }
+  const lightBorderAlpha: Record<ShareTemplate, number> = {
+    classic: 0.36,
+    poster: 0.7,
+    zen: 0.26,
+    dashboard: 0.38,
+  }
+  const darkCard = template === 'dashboard' ? '#111a24' : '#121923'
+
+  return {
+    isDark,
+    bg: isDark ? '#0c1118' : lightBg[template],
+    card: isDark ? darkCard : lightCard[template],
+    statCard: isDark ? '#172232' : '#ffffff',
+    text: isDark ? '#eef3f8' : template === 'dashboard' ? '#101927' : '#121a28',
+    muted: isDark ? '#94a3b8' : template === 'dashboard' ? '#5a6678' : '#5f6b7a',
+    empty: isDark
+      ? rgbaFromHex(accent, template === 'dashboard' ? 0.18 : 0.16)
+      : template === 'dashboard'
+        ? '#e5f7ee'
+        : rgbaFromHex(accent, 0.1),
+    border: isDark ? rgbaFromHex(accent, 0.42) : rgbaFromHex(accent, lightBorderAlpha[template]),
+    statBorder: isDark ? '#2a384a' : '#dce3eb',
+    divider: isDark ? '#2b384a' : '#dce6df',
+    shadow: isDark ? 'rgba(0, 0, 0, 0.28)' : 'rgba(20, 40, 30, 0.12)',
+  }
+}
+
 async function renderClassicShareImage(share: SharePayload) {
   const canvas = document.createElement('canvas')
   const scale = 2
   const width = 1600
-  const height = 1200
+  const height = 1060
   canvas.width = width * scale
   canvas.height = height * scale
   const ctx = canvas.getContext('2d')
@@ -321,24 +418,24 @@ async function renderClassicShareImage(share: SharePayload) {
   }
 
   const accent = themeColor(share.item.color_theme)
-  const textColor = '#121a28'
-  const mutedColor = '#5f6b7a'
-  const softTextColor = '#718096'
-  const emptyColor = rgbaFromHex(accent, 0.1)
+  const palette = shareCanvasPalette(accent, 'classic')
+  const textColor = palette.text
+  const mutedColor = palette.muted
+  const emptyColor = palette.empty
   const cardX = 36
   const cardY = 58
   const cardWidth = width - cardX * 2
-  const cardHeight = 1034
+  const cardHeight = 930
 
   ctx.scale(scale, scale)
   ctx.textBaseline = 'alphabetic'
-  ctx.fillStyle = '#f7f8fa'
+  ctx.fillStyle = palette.bg
   ctx.fillRect(0, 0, width, height)
 
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = palette.card
   roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 36)
   ctx.fill()
-  ctx.strokeStyle = rgbaFromHex(accent, 0.36)
+  ctx.strokeStyle = palette.border
   ctx.lineWidth = 1.5
   roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 36)
   ctx.stroke()
@@ -360,7 +457,6 @@ async function renderClassicShareImage(share: SharePayload) {
 
   drawClassicShareStats(ctx, share, accent, mutedColor)
   drawClassicShareHeatmap(ctx, share, accent, emptyColor, mutedColor)
-  await drawClassicShareBadges(ctx, share.badges, accent, textColor, mutedColor)
   drawClassicShareFooter(ctx, accent, mutedColor)
 
   return canvas.toDataURL('image/png')
@@ -370,7 +466,7 @@ async function renderPosterShareImage(share: SharePayload) {
   const canvas = document.createElement('canvas')
   const scale = 2
   const width = 1600
-  const height = 1200
+  const height = 1040
   canvas.width = width * scale
   canvas.height = height * scale
   const ctx = canvas.getContext('2d')
@@ -379,24 +475,25 @@ async function renderPosterShareImage(share: SharePayload) {
   }
 
   const accent = themeColor(share.item.color_theme)
-  const textColor = '#121a28'
-  const mutedColor = '#5f6b7a'
-  const emptyColor = rgbaFromHex(accent, 0.1)
+  const palette = shareCanvasPalette(accent, 'poster')
+  const textColor = palette.text
+  const mutedColor = palette.muted
+  const emptyColor = palette.empty
   const cardX = 36
   const cardY = 36
   const cardWidth = width - cardX * 2
-  const cardHeight = 1042
+  const cardHeight = 920
 
   ctx.scale(scale, scale)
   ctx.textBaseline = 'alphabetic'
-  ctx.fillStyle = '#fbfcfb'
+  ctx.fillStyle = palette.bg
   ctx.fillRect(0, 0, width, height)
 
   ctx.save()
-  ctx.shadowColor = 'rgba(20, 40, 30, 0.12)'
+  ctx.shadowColor = palette.shadow
   ctx.shadowBlur = 18
   ctx.shadowOffsetY = 8
-  ctx.fillStyle = '#fbfffc'
+  ctx.fillStyle = palette.card
   roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 34)
   ctx.fill()
   ctx.restore()
@@ -408,7 +505,7 @@ async function renderPosterShareImage(share: SharePayload) {
   drawPosterPlantWatermark(ctx, accent)
   ctx.restore()
 
-  ctx.strokeStyle = rgbaFromHex(accent, 0.7)
+  ctx.strokeStyle = palette.border
   ctx.lineWidth = 1.5
   roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 34)
   ctx.stroke()
@@ -425,7 +522,6 @@ async function renderPosterShareImage(share: SharePayload) {
 
   drawPosterShareStats(ctx, share, accent, mutedColor)
   drawPosterShareHeatmap(ctx, share, accent, emptyColor, mutedColor)
-  await drawPosterShareBadges(ctx, share.badges, accent, textColor, mutedColor)
   drawPosterShareFooter(ctx, textColor, mutedColor)
 
   return canvas.toDataURL('image/png')
@@ -435,7 +531,7 @@ async function renderZenShareImage(share: SharePayload) {
   const canvas = document.createElement('canvas')
   const scale = 2
   const width = 1240
-  const height = 1240
+  const height = 1140
   canvas.width = width * scale
   canvas.height = height * scale
   const ctx = canvas.getContext('2d')
@@ -444,25 +540,26 @@ async function renderZenShareImage(share: SharePayload) {
   }
 
   const accent = themeColor(share.item.color_theme)
-  const textColor = '#121a28'
-  const mutedColor = '#5f6b7a'
-  const emptyColor = rgbaFromHex(accent, 0.1)
+  const palette = shareCanvasPalette(accent, 'zen')
+  const textColor = palette.text
+  const mutedColor = palette.muted
+  const emptyColor = palette.empty
   const cardX = 40
   const cardY = 74
   const cardWidth = 1160
-  const cardHeight = 1114
+  const cardHeight = 1028
   const cardRadius = 42
 
   ctx.scale(scale, scale)
   ctx.textBaseline = 'alphabetic'
-  ctx.fillStyle = '#f5f7f8'
+  ctx.fillStyle = palette.bg
   ctx.fillRect(0, 0, width, height)
 
   ctx.save()
-  ctx.shadowColor = 'rgba(20, 40, 30, 0.08)'
+  ctx.shadowColor = palette.shadow
   ctx.shadowBlur = 18
   ctx.shadowOffsetY = 8
-  ctx.fillStyle = '#fbfffc'
+  ctx.fillStyle = palette.card
   roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, cardRadius)
   ctx.fill()
   ctx.restore()
@@ -473,7 +570,7 @@ async function renderZenShareImage(share: SharePayload) {
   drawZenBottomWash(ctx, accent, cardX, cardY, cardWidth, cardHeight)
   ctx.restore()
 
-  ctx.strokeStyle = rgbaFromHex(accent, 0.26)
+  ctx.strokeStyle = palette.border
   ctx.lineWidth = 1.2
   roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, cardRadius)
   ctx.stroke()
@@ -500,7 +597,6 @@ async function renderZenShareImage(share: SharePayload) {
 
   drawZenShareStats(ctx, share, accent, mutedColor)
   drawZenShareHeatmap(ctx, share, accent, emptyColor, mutedColor)
-  await drawZenShareBadges(ctx, share.badges, accent, textColor, mutedColor)
   drawZenShareFooter(ctx, textColor, mutedColor)
 
   return canvas.toDataURL('image/png')
@@ -517,10 +613,14 @@ async function renderShareImage(share: SharePayload, template: ShareTemplate) {
     return renderZenShareImage(share)
   }
 
+  return renderDashboardShareImage(share)
+}
+
+async function renderDashboardShareImage(share: SharePayload) {
   const canvas = document.createElement('canvas')
   const scale = 2
-  const width = 960
-  const height = 620
+  const width = 1600
+  const height = 880
   canvas.width = width * scale
   canvas.height = height * scale
   const ctx = canvas.getContext('2d')
@@ -528,82 +628,239 @@ async function renderShareImage(share: SharePayload, template: ShareTemplate) {
     throw new Error(languageStore.t('shareFailed'))
   }
 
-  const palette = shareCanvasPalette()
+  const accent = '#22c55e'
+  const palette = shareCanvasPalette(accent, 'dashboard')
+  const textColor = palette.text
+  const mutedColor = palette.muted
+  const emptyColor = palette.empty
+
   ctx.scale(scale, scale)
   ctx.fillStyle = palette.bg
   ctx.fillRect(0, 0, width, height)
-  ctx.fillStyle = palette.surface
-  roundedRect(ctx, 36, 36, width - 72, height - 72, 24)
+
+  drawDashboardShell(ctx, palette)
+  await drawClassicHabitIcon(ctx, share.item.icon_key, accent, 84, 92, 148)
+  drawDashboardHeader(ctx, share, accent, textColor, mutedColor)
+  await drawDashboardStats(ctx, share, accent, mutedColor, palette)
+  drawDashboardHeatmap(ctx, share, accent, emptyColor, mutedColor)
+  drawDashboardFooter(ctx, textColor, mutedColor)
+
+  return canvas.toDataURL('image/png')
+}
+
+function drawDashboardShell(
+  ctx: CanvasRenderingContext2D,
+  palette: ReturnType<typeof shareCanvasPalette>,
+) {
+  const cardX = 38
+  const cardY = 38
+  const cardWidth = 1524
+  const cardHeight = 804
+  const radius = 48
+
+  ctx.save()
+  ctx.shadowColor = palette.isDark ? 'rgba(0, 0, 0, 0.32)' : 'rgba(15, 23, 42, 0.11)'
+  ctx.shadowBlur = 22
+  ctx.shadowOffsetY = 10
+  ctx.fillStyle = palette.card
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, radius)
   ctx.fill()
+  ctx.restore()
 
-  ctx.fillStyle = palette.text
-  ctx.font = '700 44px system-ui, sans-serif'
-  ctx.fillText(share.item.name, 72, 116)
-  ctx.fillStyle = palette.muted
-  ctx.font = '500 20px system-ui, sans-serif'
-  ctx.fillText(`${share.item.category_name || languageStore.t('uncategorized')} · LumaLog`, 72, 152)
+  ctx.strokeStyle = palette.isDark ? rgbaFromHex('#22c55e', 0.56) : '#86e3a8'
+  ctx.lineWidth = 1.4
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, radius)
+  ctx.stroke()
+}
 
-  const statY = 218
+function drawDashboardHeader(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  textColor: string,
+  mutedColor: string,
+) {
+  drawFittedCanvasText(ctx, share.item.name, 292, 154, 440, 48, 830, textColor)
+
+  const categoryLabel = share.item.category_name
+    ? languageStore.categoryName(share.item.category_name)
+    : languageStore.t('uncategorized')
+  const streakLabel =
+    languageStore.preference === 'en'
+      ? `${share.stats.current_streak} day streak`
+      : `\u8FDE\u7EED ${share.stats.current_streak} \u5929`
+
+  let x = 276
+  const y = 214
+  ctx.font = canvasFont(31, 820)
+  ctx.fillStyle = accent
+  ctx.fillText(categoryLabel, x, y)
+  x += ctx.measureText(categoryLabel).width + 10
+  ctx.fillStyle = mutedColor
+  ctx.fillText('/ ', x, y)
+  x += ctx.measureText('/ ').width
+  ctx.fillStyle = accent
+  ctx.fillText(streakLabel, x, y)
+}
+
+async function drawDashboardStats(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  mutedColor: string,
+  palette: ReturnType<typeof shareCanvasPalette>,
+) {
   const stats = [
-    [languageStore.t('currentStreak'), share.stats.current_streak],
-    [languageStore.t('longestStreak'), share.stats.longest_streak],
-    [languageStore.t('totalCheckins'), share.stats.total_checkins],
-    [languageStore.t('completionRate'), `${Math.round(share.stats.completion_rate * 100)}%`],
-  ]
-  stats.forEach(([label, value], index) => {
-    const x = 72 + index * 205
-    ctx.fillStyle = palette.text
-    ctx.font = '760 34px system-ui, sans-serif'
-    ctx.fillText(String(value), x, statY)
-    ctx.fillStyle = palette.muted
-    ctx.font = '500 16px system-ui, sans-serif'
-    ctx.fillText(String(label), x, statY + 30)
+    { icon: flameIcon, label: languageStore.t('currentStreak'), value: share.stats.current_streak },
+    { icon: riseIcon, label: languageStore.t('longestStreak'), value: share.stats.longest_streak },
+    {
+      icon: progressIcon,
+      label: languageStore.t('completionRate'),
+      value: `${Math.round(share.stats.completion_rate * 100)}%`,
+    },
+    { icon: starIcon, label: languageStore.t('totalCheckins'), value: share.stats.total_checkins },
+  ] as const
+  const icons = await Promise.all(stats.map((stat) => loadCanvasSvgIcon(stat.icon, accent)))
+
+  stats.forEach((stat, index) => {
+    const x = 735 + index * 199
+    const y = 98
+    const width = 184
+    const height = 120
+
+    ctx.save()
+    ctx.shadowColor = palette.isDark ? 'rgba(0, 0, 0, 0.3)' : 'rgba(15, 23, 42, 0.08)'
+    ctx.shadowBlur = 14
+    ctx.shadowOffsetY = 7
+    ctx.fillStyle = palette.statCard
+    roundedRect(ctx, x, y, width, height, 16)
+    ctx.fill()
+    ctx.restore()
+
+    ctx.strokeStyle = palette.statBorder
+    ctx.lineWidth = 1.2
+    roundedRect(ctx, x, y, width, height, 16)
+    ctx.stroke()
+
+    const image = icons[index]
+    if (image) {
+      ctx.drawImage(image, x + 34, y + 43, 38, 38)
+    }
+
+    ctx.textAlign = 'center'
+    ctx.fillStyle = palette.isDark ? accent : '#159447'
+    ctx.font = canvasFont(34, 850)
+    ctx.fillText(String(stat.value), x + 126, y + 62)
+    ctx.fillStyle = mutedColor
+    ctx.font = canvasFont(18, 800)
+    ctx.fillText(stat.label, x + 126, y + 94)
+    ctx.textAlign = 'left'
   })
+}
 
-  const heatmapWeeks = buildShareHeatmapWeeks(share.heatmap)
-  const monthLabels = buildShareMonthLabels(heatmapWeeks)
+function drawDashboardHeatmap(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  emptyColor: string,
+  mutedColor: string,
+) {
+  const visibleValues = share.heatmap.length > 153 ? share.heatmap.slice(-153) : share.heatmap
+  const heatmapWeeks = buildShareHeatmapWeeks(visibleValues)
   const columns = heatmapWeeks.length
-  const gap = 3
-  const gridLeft = 72
-  const gridTop = 310
-  const gridWidth = width - gridLeft * 2
-  const cell = columns > 0 ? (gridWidth - (columns - 1) * gap) / columns : 0
-  const gridHeight = cell * 7 + gap * 6
+  if (columns === 0) {
+    return
+  }
 
-  ctx.fillStyle = palette.muted
-  ctx.font = '500 13px system-ui, sans-serif'
+  const gridLeft = 122
+  const gridTop = 325
+  const gridWidth = 1370
+  const gap = 14
+  const cell = Math.min(46, (gridWidth - (columns - 1) * gap) / columns)
+  const monthLabels = buildDashboardMonthLabels(heatmapWeeks)
+
+  ctx.fillStyle = mutedColor
+  ctx.font = canvasFont(23, 800)
   monthLabels.forEach((month) => {
-    ctx.fillText(month.label, gridLeft + month.index * (cell + gap), gridTop - 14)
+    ctx.fillText(month.label, gridLeft + month.index * (cell + gap), gridTop - 21)
   })
 
   heatmapWeeks.forEach((week, weekIndex) => {
-    week.forEach((day, dayIndex) => {
-      if (!day) {
-        return
-      }
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const day = week[dayIndex]
       const x = gridLeft + weekIndex * (cell + gap)
       const y = gridTop + dayIndex * (cell + gap)
-      ctx.fillStyle = canvasHeatmapLevelColor(
-        share.item.color_theme,
-        day.level,
-        palette.squareEmpty,
-      )
-      roundedRect(ctx, x, y, cell, cell, Math.min(3, cell / 3))
+      ctx.fillStyle = day && day.level > 0 ? accent : emptyColor
+      roundedRect(ctx, x, y, cell, cell, 7)
       ctx.fill()
-    })
+    }
   })
+}
 
-  ctx.fillStyle = palette.muted
-  ctx.font = '500 16px system-ui, sans-serif'
-  ctx.fillText(
-    `${languageStore.t('heatmapLabel')} · ${columns} weeks`,
-    gridLeft,
-    gridTop + gridHeight + 28,
-  )
+function buildDashboardMonthLabels(weeks: Array<Array<HeatmapDay | null>>) {
+  const visibleDays = weeks.flat().filter(Boolean) as HeatmapDay[]
+  const firstValue = visibleDays[0]
+  const lastValue = visibleDays.at(-1)
+  const spansMultipleYears = firstValue
+    ? Boolean(lastValue) &&
+      parseLocalDate(firstValue.date).getFullYear() !==
+        parseLocalDate(lastValue?.date ?? firstValue.date).getFullYear()
+    : false
+  const seenMonths = new Set<string>()
 
-  await drawShareBadges(ctx, share.badges, palette, gridTop + gridHeight + 68)
+  return weeks
+    .map((week, index) => {
+      const firstDayOfMonth = week.find((day) => day && parseLocalDate(day.date).getDate() === 1)
+      const firstVisibleDay = index === 0 ? week.find((day) => day) : null
+      const targetDay = firstDayOfMonth ?? firstVisibleDay
+      if (!targetDay) {
+        return null
+      }
 
-  return canvas.toDataURL('image/png')
+      const date = parseLocalDate(targetDay.date)
+      const monthKey = `${date.getFullYear()}-${date.getMonth()}`
+      if (seenMonths.has(monthKey)) {
+        return null
+      }
+
+      seenMonths.add(monthKey)
+      return {
+        label: dashboardMonthLabel(date, spansMultipleYears),
+        index,
+      }
+    })
+    .filter(Boolean) as Array<{ label: string; index: number }>
+}
+
+function dashboardMonthLabel(date: Date, spansMultipleYears: boolean) {
+  if (languageStore.preference === 'en') {
+    const label = enMonthNames[date.getMonth()] ?? ''
+    return spansMultipleYears && date.getMonth() === 0 ? `${label} ${date.getFullYear()}` : label
+  }
+
+  const monthLabel = `${date.getMonth() + 1}\u6708`
+  return spansMultipleYears && date.getMonth() === 0
+    ? `${date.getFullYear()}\u5E74${monthLabel}`
+    : monthLabel
+}
+
+function drawDashboardFooter(
+  ctx: CanvasRenderingContext2D,
+  textColor: string,
+  mutedColor: string,
+) {
+  const y = 810
+  let x = 88
+
+  ctx.font = canvasFont(22, 850)
+  ctx.fillStyle = textColor
+  ctx.fillText('LumaLog', x, y)
+  x += ctx.measureText('LumaLog').width + 12
+  ctx.fillStyle = mutedColor
+  ctx.fillText('/ ', x, y)
+  x += ctx.measureText('/ ').width
+  ctx.font = canvasFont(22, 800)
+  ctx.fillText(languageStore.t('checkinHeatmap'), x, y)
 }
 
 function canvasFont(size: number, weight: number | string = 500) {
@@ -718,6 +975,22 @@ function decodeCssContent(content: string) {
   return unquoted.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex: string) =>
     String.fromCodePoint(Number.parseInt(hex, 16)),
   )
+}
+
+function canvasSvgMarkup(svg: string, color: string) {
+  const normalized = svg
+    .replace(/<\?xml[\s\S]*?\?>/gi, '')
+    .replace(/<!DOCTYPE[\s\S]*?>/gi, '')
+    .replace(/\s(width|height)="[^"]*"/gi, '')
+    .replace(/<svg\b/i, `<svg color="${color}"`)
+  const style = `<style>path:not([fill="none"]),circle:not([fill="none"]),rect:not([fill="none"]),polygon:not([fill="none"]),ellipse:not([fill="none"]){fill:currentColor}[stroke]:not([stroke="none"]){stroke:currentColor}</style>`
+
+  return normalized.replace(/<svg\b([^>]*)>/i, `<svg$1>${style}`)
+}
+
+function loadCanvasSvgIcon(svg: string, color: string) {
+  const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(canvasSvgMarkup(svg, color))}`
+  return loadCanvasImage(src).catch(() => null)
 }
 
 function drawFallbackHabitIcon(ctx: CanvasRenderingContext2D, accent: string, centerX: number, centerY: number) {
@@ -853,7 +1126,7 @@ function drawPosterShareStats(
   const dividers = [950, 1138, 1324]
 
   ctx.save()
-  ctx.strokeStyle = '#dce6df'
+  ctx.strokeStyle = shareCanvasDividerColor('#dce6df')
   ctx.lineWidth = 1
   dividers.forEach((x) => {
     ctx.beginPath()
@@ -915,58 +1188,8 @@ function drawPosterShareHeatmap(
   })
 }
 
-async function drawPosterShareBadges(
-  ctx: CanvasRenderingContext2D,
-  badges: Badge[],
-  accent: string,
-  textColor: string,
-  mutedColor: string,
-) {
-  const earned = badges.filter((badge) => badge.earned).slice(0, 2)
-  if (earned.length === 0) {
-    return
-  }
-
-  const cardTop = 808
-  const cardLeft = 94
-  const cardWidth = 292
-  const cardHeight = 118
-  const gap = 36
-  const iconSize = 48
-  const images = await Promise.all(
-    earned.map((badge) => loadCanvasImage(badgeImage(badge.id)).catch(() => null)),
-  )
-
-  earned.forEach((badge, index) => {
-    const x = cardLeft + index * (cardWidth + gap)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.82)'
-    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 15)
-    ctx.fill()
-    ctx.strokeStyle = rgbaFromHex(accent, 0.16)
-    ctx.lineWidth = 1.2
-    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 15)
-    ctx.stroke()
-
-    const image = images[index]
-    if (image) {
-      ctx.drawImage(image, x + 34, cardTop + 34, iconSize, iconSize)
-    } else {
-      ctx.fillStyle = rgbaFromHex(accent, 0.12)
-      roundedRect(ctx, x + 34, cardTop + 34, iconSize, iconSize, iconSize / 2)
-      ctx.fill()
-    }
-
-    ctx.fillStyle = textColor
-    ctx.font = canvasFont(27, 760)
-    ctx.fillText(badge.title, x + 146, cardTop + 52)
-    ctx.fillStyle = mutedColor
-    ctx.font = canvasFont(19, 650)
-    ctx.fillText(classicBadgeSubtitle(badge), x + 146, cardTop + 88)
-  })
-}
-
 function drawPosterShareFooter(ctx: CanvasRenderingContext2D, textColor: string, mutedColor: string) {
-  const y = 1012
+  const y = 900
   let x = 92
   ctx.font = canvasFont(28, 800)
   ctx.fillStyle = textColor
@@ -1128,15 +1351,15 @@ function drawZenShareStats(
   const dividers = [372, 620, 868]
 
   ctx.save()
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.78)'
+  ctx.fillStyle = isDarkShareCanvas() ? 'rgba(23, 34, 50, 0.86)' : 'rgba(255, 255, 255, 0.78)'
   roundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 18)
   ctx.fill()
-  ctx.strokeStyle = rgbaFromHex(accent, 0.18)
+  ctx.strokeStyle = rgbaFromHex(accent, isDarkShareCanvas() ? 0.3 : 0.18)
   ctx.lineWidth = 1.1
   roundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 18)
   ctx.stroke()
 
-  ctx.strokeStyle = '#dfe8e2'
+  ctx.strokeStyle = shareCanvasDividerColor('#dfe8e2')
   ctx.lineWidth = 1
   dividers.forEach((x) => {
     ctx.beginPath()
@@ -1201,59 +1424,8 @@ function drawZenShareHeatmap(
   ctx.restore()
 }
 
-async function drawZenShareBadges(
-  ctx: CanvasRenderingContext2D,
-  badges: Badge[],
-  accent: string,
-  textColor: string,
-  mutedColor: string,
-) {
-  const earned = badges.filter((badge) => badge.earned).slice(0, 2)
-  if (earned.length === 0) {
-    return
-  }
-
-  const cardTop = 968
-  const cardLeft = 124
-  const cardWidth = 270
-  const cardHeight = 110
-  const gap = 38
-  const iconSize = 52
-  const images = await Promise.all(
-    earned.map((badge) => loadCanvasImage(badgeImage(badge.id)).catch(() => null)),
-  )
-
-  ctx.save()
-  ctx.textAlign = 'left'
-  earned.forEach((badge, index) => {
-    const x = cardLeft + index * (cardWidth + gap)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.86)'
-    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
-    ctx.fill()
-    ctx.strokeStyle = rgbaFromHex(accent, 0.16)
-    ctx.lineWidth = 1.1
-    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
-    ctx.stroke()
-
-    const image = images[index]
-    if (image) {
-      ctx.drawImage(image, x + 34, cardTop + 29, iconSize, iconSize)
-    } else {
-      ctx.fillStyle = rgbaFromHex(accent, 0.12)
-      roundedRect(ctx, x + 34, cardTop + 29, iconSize, iconSize, iconSize / 2)
-      ctx.fill()
-    }
-
-    drawFittedCanvasText(ctx, badge.title, x + 130, cardTop + 48, 118, 25, 760, textColor)
-    ctx.fillStyle = mutedColor
-    ctx.font = canvasFont(17, 600)
-    ctx.fillText(classicBadgeSubtitle(badge), x + 130, cardTop + 78)
-  })
-  ctx.restore()
-}
-
 function drawZenShareFooter(ctx: CanvasRenderingContext2D, textColor: string, mutedColor: string) {
-  const y = 1126
+  const y = 1044
   const label = languageStore.t('checkinHeatmap')
   const slash = ' / '
 
@@ -1283,7 +1455,7 @@ function drawZenShareFooter(ctx: CanvasRenderingContext2D, textColor: string, mu
     languageStore.preference === 'en'
       ? 'Track tiny habits · grow with consistency'
       : '记录微小习惯 · 见证持续成长'
-  ctx.fillText(tagline, 620, 1170)
+  ctx.fillText(tagline, 620, 1086)
   ctx.restore()
 }
 
@@ -1305,7 +1477,7 @@ function drawClassicShareStats(
   const centers = [250, 600, 950, 1300]
 
   ctx.save()
-  ctx.strokeStyle = '#e3e8e4'
+  ctx.strokeStyle = shareCanvasDividerColor('#e3e8e4')
   ctx.lineWidth = 1
   const dividers = [425, 775, 1125]
   dividers.forEach((x) => {
@@ -1370,69 +1542,8 @@ function drawClassicShareHeatmap(
   })
 }
 
-async function drawClassicShareBadges(
-  ctx: CanvasRenderingContext2D,
-  badges: Badge[],
-  accent: string,
-  textColor: string,
-  mutedColor: string,
-) {
-  const earned = badges.filter((badge) => badge.earned).slice(0, 2)
-  if (earned.length === 0) {
-    return
-  }
-
-  const cardTop = 868
-  const cardLeft = 92
-  const cardWidth = 264
-  const cardHeight = 86
-  const gap = 26
-  const iconSize = 46
-  const images = await Promise.all(
-    earned.map((badge) => loadCanvasImage(badgeImage(badge.id)).catch(() => null)),
-  )
-
-  earned.forEach((badge, index) => {
-    const x = cardLeft + index * (cardWidth + gap)
-    ctx.fillStyle = '#ffffff'
-    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
-    ctx.fill()
-    ctx.strokeStyle = '#e6eee9'
-    ctx.lineWidth = 1
-    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
-    ctx.stroke()
-
-    const image = images[index]
-    if (image) {
-      ctx.drawImage(image, x + 32, cardTop + 20, iconSize, iconSize)
-    } else {
-      ctx.fillStyle = rgbaFromHex(accent, 0.12)
-      roundedRect(ctx, x + 32, cardTop + 20, iconSize, iconSize, iconSize / 2)
-      ctx.fill()
-    }
-
-    ctx.fillStyle = textColor
-    ctx.font = canvasFont(25, 760)
-    ctx.fillText(badge.title, x + 118, cardTop + 40)
-    ctx.fillStyle = mutedColor
-    ctx.font = canvasFont(17, 600)
-    ctx.fillText(classicBadgeSubtitle(badge), x + 118, cardTop + 66)
-  })
-}
-
-function classicBadgeSubtitle(badge: Badge) {
-  const subtitles: Record<string, string> = {
-    first_light: '点亮第一天',
-    week_streak: '连续点亮 7 天',
-    month_streak: '连续点亮 30 天',
-    hundred_lights: '累计记录 100 次',
-    steady_flow: '完成率达到 80%',
-  }
-  return subtitles[badge.id] ?? badge.description
-}
-
 function drawClassicShareFooter(ctx: CanvasRenderingContext2D, accent: string, mutedColor: string) {
-  const y = 1028
+  const y = 950
   let x = 92
   ctx.font = canvasFont(25, 760)
   ctx.fillStyle = accent
@@ -1524,19 +1635,6 @@ function startOfHeatmapWeek(date: Date) {
   return result
 }
 
-function shareCanvasPalette() {
-  return {
-    bg: cssVariableValue('--bg', '#0c1118'),
-    surface: cssVariableValue('--surface', '#121923'),
-    surfaceSoft: cssVariableValue('--surface-soft', '#192230'),
-    text: cssVariableValue('--text', '#eef3f8'),
-    muted: cssVariableValue('--muted', '#94a3b8'),
-    border: cssVariableValue('--border', '#263244'),
-    accent: cssVariableValue('--accent', '#4ade80'),
-    squareEmpty: cssVariableValue('--square-empty', '#1c2634'),
-  }
-}
-
 function cssVariableValue(name: string, fallback: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
 }
@@ -1549,46 +1647,6 @@ function canvasHeatmapLevelColor(theme: string, level: number, emptyColor: strin
   }
 
   return cssVariableValue(cssVariable, emptyColor)
-}
-
-async function drawShareBadges(
-  ctx: CanvasRenderingContext2D,
-  badges: Badge[],
-  palette: ReturnType<typeof shareCanvasPalette>,
-  top: number,
-) {
-  const earned = badges.filter((badge) => badge.earned).slice(0, 5)
-  if (earned.length === 0) {
-    return
-  }
-
-  ctx.fillStyle = palette.text
-  ctx.font = '700 18px system-ui, sans-serif'
-  ctx.fillText(languageStore.t('earnedBadges'), 72, top)
-
-  const badgeWidth = 96
-  const gap = 20
-  const iconSize = 50
-  const startX = 72
-  const badgeTop = top + 18
-  const images = await Promise.all(earned.map((badge) => loadCanvasImage(badgeImage(badge.id))))
-
-  earned.forEach((badge, index) => {
-    const image = images[index]
-    if (!image) {
-      return
-    }
-
-    const x = startX + index * (badgeWidth + gap)
-    const imageX = x + (badgeWidth - iconSize) / 2
-    ctx.drawImage(image, imageX, badgeTop, iconSize, iconSize)
-
-    ctx.fillStyle = palette.text
-    ctx.font = '700 12px system-ui, sans-serif'
-    ctx.textAlign = 'center'
-    ctx.fillText(badge.title, x + badgeWidth / 2, badgeTop + 66)
-    ctx.textAlign = 'left'
-  })
 }
 
 function loadCanvasImage(src: string) {
@@ -1662,7 +1720,29 @@ onMounted(load)
         :allow-makeup="item.allow_makeup"
         @checkin="checkin"
         @makeup="router.push(`/items/${item.id}/makeup`)"
-      />
+      >
+        <template v-if="showCheckinNoteInput" #middle>
+          <div class="checkin-note-box">
+            <div class="checkin-note-head">
+              <label class="checkin-note-label" for="checkin-note-input">
+                {{ languageStore.t('checkinNote') }}
+              </label>
+              <span class="checkin-note-count">
+                {{ checkinNote.length }}/{{ checkinNoteMaxLength }}
+              </span>
+            </div>
+            <textarea
+              id="checkin-note-input"
+              class="checkin-note-input"
+              :value="checkinNote"
+              :maxlength="checkinNoteMaxLength"
+              :placeholder="languageStore.t('checkinNotePlaceholder')"
+              rows="3"
+              @input="updateCheckinNote"
+            />
+          </div>
+        </template>
+      </CheckinButton>
 
       <section class="checkin-stats app-card">
         <div v-for="(stat, index) in checkinStats" :key="stat.label" class="checkin-stat">
@@ -1743,11 +1823,13 @@ onMounted(load)
     <div
       v-if="sharePickerOpen"
       class="share-picker-backdrop"
+      :class="{ 'is-dark': themeStore.resolvedTheme === 'dark' }"
       :style="{ '--item-accent': accent }"
       @click.self="closeSharePicker"
     >
       <section
         class="share-picker-dialog"
+        :class="{ 'is-dark': themeStore.resolvedTheme === 'dark' }"
         role="dialog"
         aria-modal="true"
         :aria-label="languageStore.t('shareTemplateTitle')"
@@ -1831,12 +1913,6 @@ onMounted(load)
                   <em />
                 </div>
                 <span v-if="option.id === 'dashboard'" class="share-preview-divider" />
-                <div class="share-preview-badges">
-                  <span v-for="badge in sharePreviewBadges" :key="badge">
-                    <i />
-                    <em />
-                  </span>
-                </div>
               </div>
             </div>
             <span class="share-template-label">{{ shareTemplateName(option) }}</span>
@@ -1993,6 +2069,67 @@ onMounted(load)
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.checkin-note-box {
+  display: grid;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.checkin-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.checkin-note-label {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 500;
+}
+
+.checkin-note-count {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 13px;
+}
+
+.checkin-note-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 14px;
+  outline: none;
+  background: color-mix(in srgb, var(--surface-soft) 52%, transparent);
+  color: var(--text);
+  padding: 10px 11px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+.checkin-note-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
+.checkin-note-input:focus {
+  border-color: color-mix(in srgb, var(--item-accent) 56%, var(--border));
+  background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--item-accent) 12%, transparent);
+}
+
+:global(html[data-theme='dark']) .checkin-note-input {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.42);
 }
 
 .checkin-stats {
@@ -2662,34 +2799,6 @@ onMounted(load)
   background: #e2e8f0;
 }
 
-.share-preview-badges {
-  display: none;
-  justify-content: space-evenly;
-  gap: 3px;
-  width: 100%;
-}
-
-.share-preview-badges span {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  min-width: 0;
-}
-
-.share-preview-badges i {
-  width: 11px;
-  height: 11px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--item-accent) 72%, transparent);
-}
-
-.share-preview-badges em {
-  width: 22px;
-  height: 4px;
-  border-radius: 2px;
-  background: #cbd5e1;
-}
-
 .share-picker-cancel {
   border: 0;
   background: transparent;
@@ -2724,6 +2833,86 @@ onMounted(load)
 .share-picker-confirm:disabled {
   cursor: not-allowed;
   opacity: 0.52;
+}
+
+.share-picker-backdrop.is-dark {
+  background: rgba(2, 6, 12, 0.68);
+}
+
+.share-picker-dialog.is-dark {
+  background: linear-gradient(160deg, #151b25 0%, #151923 100%);
+  color: #eef3f8;
+}
+
+.share-picker-dialog.is-dark .share-picker-handle {
+  background: #475569;
+}
+
+.share-picker-dialog.is-dark p,
+.share-picker-dialog.is-dark .share-template-kicker,
+.share-picker-dialog.is-dark .share-picker-cancel {
+  color: #94a3b8;
+}
+
+.share-picker-dialog.is-dark .share-template-option {
+  border-color: color-mix(in srgb, var(--item-accent) 34%, #334155);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(20, 27, 38, 0.95) 0%,
+      rgba(20, 27, 38, 0.95) 73%,
+      rgba(17, 24, 34, 0.96) 73%
+    ),
+    #111923;
+  color: #eef3f8;
+}
+
+.share-picker-dialog.is-dark .share-template-option.is-selected {
+  border-color: color-mix(in srgb, var(--item-accent) 82%, #22c55e);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--item-accent) 72%, #22c55e);
+}
+
+.share-picker-dialog.is-dark .share-template-label {
+  color: #eef3f8;
+}
+
+.share-picker-dialog.is-dark .share-preview-subtitle-line {
+  background: color-mix(in srgb, var(--item-accent) 24%, #273449);
+}
+
+.share-picker-dialog.is-dark .share-template-preview.is-poster .share-preview-statline.is-mini,
+.share-picker-dialog.is-dark .share-template-preview.is-dashboard .share-preview-statline.is-mini span,
+.share-picker-dialog.is-dark .share-preview-zen-strip {
+  border-color: color-mix(in srgb, var(--item-accent) 30%, #263244);
+  background: color-mix(in srgb, var(--item-accent) 10%, #162132);
+}
+
+.share-picker-dialog.is-dark .share-preview-zen-footer span,
+.share-picker-dialog.is-dark .share-preview-classic-footer span {
+  border-color: color-mix(in srgb, var(--item-accent) 30%, #263244);
+  background: color-mix(in srgb, var(--item-accent) 10%, #172033);
+}
+
+.share-picker-dialog.is-dark .share-preview-heatmap i {
+  background: color-mix(in srgb, var(--item-accent) 14%, #1e293b);
+}
+
+.share-picker-dialog.is-dark .share-preview-heatmap i.level-1 {
+  background: color-mix(in srgb, var(--item-accent) 32%, #1e293b);
+}
+
+.share-picker-dialog.is-dark .share-preview-heatmap i.level-2 {
+  background: color-mix(in srgb, var(--item-accent) 58%, #1e293b);
+}
+
+.share-picker-dialog.is-dark .share-preview-heatmap i.level-3 {
+  background: color-mix(in srgb, var(--item-accent) 86%, #1e293b);
+}
+
+.share-picker-dialog.is-dark .share-preview-statline em,
+.share-picker-dialog.is-dark .share-preview-zen-lines span,
+.share-picker-dialog.is-dark .share-preview-classic-footer em {
+  background: #475569;
 }
 
 :global(html[data-theme='dark']) .share-picker-backdrop {
@@ -2765,8 +2954,42 @@ onMounted(load)
   color: #eef3f8;
 }
 
+:global(html[data-theme='dark']) .share-preview-subtitle-line {
+  background: color-mix(in srgb, var(--item-accent) 24%, #273449);
+}
+
+:global(html[data-theme='dark']) .share-template-preview.is-poster .share-preview-statline.is-mini,
+:global(html[data-theme='dark']) .share-template-preview.is-dashboard .share-preview-statline.is-mini span,
+:global(html[data-theme='dark']) .share-preview-zen-strip {
+  border-color: color-mix(in srgb, var(--item-accent) 30%, #263244);
+  background: color-mix(in srgb, var(--item-accent) 10%, #162132);
+}
+
+:global(html[data-theme='dark']) .share-preview-zen-footer span,
+:global(html[data-theme='dark']) .share-preview-classic-footer span {
+  border-color: color-mix(in srgb, var(--item-accent) 30%, #263244);
+  background: color-mix(in srgb, var(--item-accent) 10%, #172033);
+}
+
+:global(html[data-theme='dark']) .share-preview-heatmap i {
+  background: color-mix(in srgb, var(--item-accent) 14%, #1e293b);
+}
+
+:global(html[data-theme='dark']) .share-preview-heatmap i.level-1 {
+  background: color-mix(in srgb, var(--item-accent) 32%, #1e293b);
+}
+
+:global(html[data-theme='dark']) .share-preview-heatmap i.level-2 {
+  background: color-mix(in srgb, var(--item-accent) 58%, #1e293b);
+}
+
+:global(html[data-theme='dark']) .share-preview-heatmap i.level-3 {
+  background: color-mix(in srgb, var(--item-accent) 86%, #1e293b);
+}
+
 :global(html[data-theme='dark']) .share-preview-statline em,
-:global(html[data-theme='dark']) .share-preview-badges em {
+:global(html[data-theme='dark']) .share-preview-zen-lines span,
+:global(html[data-theme='dark']) .share-preview-classic-footer em {
   background: #475569;
 }
 

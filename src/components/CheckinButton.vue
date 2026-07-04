@@ -62,6 +62,8 @@ const segments = computed(() => {
       </span>
     </div>
 
+    <slot name="middle" />
+
     <div class="goal-actions">
       <button v-if="allowMakeup" class="goal-action makeup" type="button" @click="emit('makeup')">
         <SvgIcon :src="supplementIcon" :size="15" />
@@ -131,7 +133,7 @@ const segments = computed(() => {
 
 :root[data-theme='dark'] .goal-segment {
   background: color-mix(in srgb, var(--surface-soft) 48%, transparent);
-  color: color-mix(in srgb, var(--muted) 58%, transparent);
+  color: rgba(255, 255, 255, 0.84);
 }
 
 .goal-segment i {
@@ -144,6 +146,11 @@ const segments = computed(() => {
 .goal-segment.partial,
 .goal-segment.complete {
   color: rgba(255, 255, 255, 0.92);
+}
+
+:root[data-theme='dark'] .goal-segment.partial,
+:root[data-theme='dark'] .goal-segment.complete {
+  color: #ffffff;
 }
 
 .goal-segment .svg-icon {
