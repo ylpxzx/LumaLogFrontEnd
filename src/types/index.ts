@@ -54,6 +54,7 @@ export interface Item {
   user_id: number
   category_id: number
   category_name: string
+  icon_key?: string
   name: string
   description: string
   color_theme: string
@@ -66,6 +67,7 @@ export interface Item {
   valid_end_time: string
   allow_makeup: boolean
   makeup_monthly_limit: number
+  makeup_limit_days?: number
   allow_extra_checkins: boolean
   show_on_dashboard: boolean
   sort_order: number
@@ -112,6 +114,7 @@ export interface AuthResponse {
 
 export interface ItemPayload {
   category_id?: number
+  icon_key?: string
   name?: string
   description?: string
   color_theme?: string
@@ -124,6 +127,7 @@ export interface ItemPayload {
   valid_end_time?: string
   allow_makeup?: boolean
   makeup_monthly_limit?: number
+  makeup_limit_days?: number
   allow_extra_checkins?: boolean
   show_on_dashboard?: boolean
   sort_order?: number

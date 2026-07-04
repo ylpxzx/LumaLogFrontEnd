@@ -6,6 +6,7 @@ import { useLanguageStore } from '@/stores/language'
 import { statusText } from '@/utils/status'
 import { themeColor } from '@/utils/colors'
 import ContributionHeatmap from './ContributionHeatmap.vue'
+import LumaIconBadge from './LumaIconBadge.vue'
 
 const props = defineProps<{
   entry: DashboardItem
@@ -22,6 +23,8 @@ const suppressNextClick = ref(false)
 const hasVisibleStats = computed(() => {
   return Object.values(props.statsVisibility).some(Boolean)
 })
+
+const accent = computed(() => themeColor(props.entry.item.color_theme))
 
 function openCheckin() {
   if (suppressNextClick.value) {
@@ -58,6 +61,7 @@ function clearLongPress() {
 <template>
   <article
     class="item-entry"
+    :style="{ '--item-accent': accent }"
     :title="languageStore.t('longPressEdit')"
     @click="openCheckin"
     @contextmenu.prevent
@@ -67,13 +71,17 @@ function clearLongPress() {
     @pointerleave="clearLongPress"
   >
     <header class="item-entry-header">
-      <div class="item-heading">
-        <h4>{{ entry.item.name }}</h4>
-        <span v-if="showTodayStatus" class="status-chip">
-          {{ statusText(entry.status, languageStore.preference) }}
-        </span>
+      <LumaIconBadge :icon-key="entry.item.icon_key" :accent="accent" :size="44" />
+      <div class="item-main">
+        <div class="item-heading">
+          <h4>{{ entry.item.name }}</h4>
+          <span v-if="showTodayStatus" class="status-chip">
+            {{ statusText(entry.status, languageStore.preference) }}
+          </span>
+        </div>
+        <p v-if="entry.item.description">{{ entry.item.description }}</p>
       </div>
-      <span class="category-pill" :style="{ '--category-color': themeColor(entry.item.color_theme) }">
+      <span class="category-pill">
         {{ entry.item.category_name ? languageStore.categoryName(entry.item.category_name) : languageStore.t('uncategorized') }}
       </span>
     </header>
@@ -97,8 +105,13 @@ function clearLongPress() {
       </div>
     </div>
 
-    <div class="heatmap-card card">
-      <ContributionHeatmap :values="entry.heatmap" :color-theme="entry.item.color_theme" />
+    <div class="heatmap-card">
+      <ContributionHeatmap
+        :values="entry.heatmap"
+        :color-theme="entry.item.color_theme"
+        :max-days="153"
+        :show-months="true"
+      />
     </div>
   </article>
 </template>
@@ -106,66 +119,98 @@ function clearLongPress() {
 <style scoped>
 .item-entry {
   display: grid;
-  /* gap: 10px; */
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  padding: 14px 14px 17px;
   transition:
+    border-color 160ms ease,
     transform 160ms ease,
     opacity 160ms ease;
 }
 
 .item-entry:hover {
+  border-color: color-mix(in srgb, var(--item-accent) 26%, var(--border-strong));
   transform: translateY(-1px);
 }
 
 .item-entry-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 0 2px;
+  gap: 12px;
 }
 
 .item-heading {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+}
+
+.item-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+}
+
+.item-main p {
+  overflow: hidden;
+  margin: 0;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  font-size: 11.5px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .category-pill {
   display: inline-flex;
+  max-width: 110px;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 12%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--item-accent) 8%, transparent);
+  color: color-mix(in srgb, var(--item-accent) 90%, var(--text));
+  margin-left: 2px;
+  padding: 4px 7px;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .category-pill::before {
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-  background: var(--category-color);
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--item-accent);
   content: '';
 }
 
-.item-heading h2 {
+.item-heading h4 {
   overflow: hidden;
   margin: 0;
-  font-size: 18px;
-  line-height: 1.25;
+  font-size: 19px;
+  line-height: 23px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .status-chip {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--item-accent) 11%, transparent);
+  color: var(--item-accent);
+  font-size: 9px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 11px;
   padding: 3px 6px;
   white-space: nowrap;
 }
@@ -173,32 +218,44 @@ function clearLongPress() {
 .stats-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 2px 2px 0;
+  overflow: hidden;
+  border-radius: 13px;
+  background: var(--surface-soft);
+  padding: 9px 0 8px;
 }
 
 .stats-row div {
   display: grid;
+  min-width: 0;
   gap: 3px;
+  place-items: center;
+  border-left: 1px solid color-mix(in srgb, var(--border-strong) 38%, transparent);
+}
+
+.stats-row div:first-child {
+  border-left: 0;
 }
 
 .stats-row strong {
-  font-size: 22px;
-  line-height: 1;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 21px;
+  font-weight: 600;
 }
 
 .stats-row span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 9px;
+  line-height: 13px;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .heatmap-card {
-  padding: 14px;
-  transition: border-color 160ms ease;
-}
-
-.item-entry:hover .heatmap-card {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  min-width: 0;
+  padding: 0 2px 1px;
 }
 
 @media (max-width: 720px) {
@@ -209,11 +266,7 @@ function clearLongPress() {
   }
 
   .item-heading {
-    flex-wrap: wrap;
-  }
-
-  .stats-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
   }
 }
 </style>

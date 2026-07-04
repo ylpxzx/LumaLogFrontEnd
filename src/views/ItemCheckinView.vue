@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { createCheckin, fetchItem, fetchItemBadges, fetchItemShare, listCheckins } from '@/api/items'
+import { useRoute, useRouter } from 'vue-router'
+import { createCheckin, fetchItem, listCheckins } from '@/api/items'
 import CheckinButton from '@/components/CheckinButton.vue'
 import ContributionHeatmap from '@/components/ContributionHeatmap.vue'
+import LumaIconBadge from '@/components/LumaIconBadge.vue'
+import SvgIcon from '@/components/SvgIcon.vue'
+import type { MessageKey } from '@/i18n/messages'
 import { useLanguageStore } from '@/stores/language'
 import { badgeImage } from '@/utils/badgeImages'
-import { heatmapLevelColor } from '@/utils/colors'
+import { heatmapLevelColor, rgbaFromHex, themeColor } from '@/utils/colors'
 import { formatDate, formatFullDisplayDate, parseLocalDate, todayString } from '@/utils/dates'
+import { lumaIconClass } from '@/utils/icons'
 import type { Badge, Checkin, DashboardItem, HeatmapDay, SharePayload } from '@/types'
-import { statusText } from '@/utils/status'
+import achievementIcon from '@/assets/svg/achievement.svg?raw'
+import flameIcon from '@/assets/svg/flame.svg?raw'
+import foldIcon from '@/assets/svg/fold.svg?raw'
+import progressIcon from '@/assets/svg/progress.svg?raw'
+import riseIcon from '@/assets/svg/icon-rise.svg?raw'
+import starIcon from '@/assets/svg/star.svg?raw'
 
 const route = useRoute()
+const router = useRouter()
 const languageStore = useLanguageStore()
 const itemId = Number(route.params.id)
 
@@ -19,41 +29,119 @@ const entry = ref<DashboardItem | null>(null)
 const loading = ref(true)
 const checking = ref(false)
 const error = ref('')
-const success = ref('')
-const note = ref('')
 const checkins = ref<Checkin[]>([])
 const badges = ref<Badge[]>([])
 const sharing = ref(false)
+const sharePickerOpen = ref(false)
+const selectedShareTemplate = ref<ShareTemplate>('poster')
+const achievementsExpanded = ref(false)
 
 const item = computed(() => entry.value?.item)
 const earnedBadges = computed(() => badges.value.filter((badge) => badge.earned))
-const zhMonthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
-const enMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-const timeHint = computed(() => {
-  if (!item.value) {
-    return ''
-  }
-  if (item.value.time_mode === 'all_day') {
-    return languageStore.t('allDayCheckin')
-  }
-  return `${item.value.valid_start_time} - ${item.value.valid_end_time}`
+const accent = computed(() => (item.value ? themeColor(item.value.color_theme) : '#22c55e'))
+const today = computed(() => todayString())
+const checkinsByDate = computed(() => {
+  const result = new Map<string, Checkin[]>()
+  checkins.value.forEach((record) => {
+    const records = result.get(record.checkin_date) ?? []
+    records.push(record)
+    result.set(record.checkin_date, records)
+  })
+  return result
 })
+const makeupDates = computed(() => {
+  return [...checkinsByDate.value.entries()]
+    .filter(([, records]) => records.some((record) => record.source === 'makeup'))
+    .map(([date]) => date)
+})
+const heatmapDayLabels = computed(() => {
+  const labels: Record<string, string> = {}
+  entry.value?.heatmap.forEach((day) => {
+    const records = checkinsByDate.value.get(day.date) ?? []
+    const hasMakeup = records.some((record) => record.source === 'makeup')
+    const hasNormal = records.some((record) => record.source !== 'makeup')
+    const sourceLabel =
+      hasNormal && hasMakeup
+        ? `${languageStore.t('normalCheckin')} + ${languageStore.t('makeupCheckin')}`
+        : hasMakeup
+          ? languageStore.t('makeupCheckin')
+          : hasNormal
+            ? languageStore.t('normalCheckin')
+            : ''
+    if (sourceLabel) {
+      labels[day.date] = `${dayText(day)} / ${sourceLabel}`
+    }
+  })
+  return labels
+})
+const zhMonthNames = [
+  '1月',
+  '2月',
+  '3月',
+  '4月',
+  '5月',
+  '6月',
+  '7月',
+  '8月',
+  '9月',
+  '10月',
+  '11月',
+  '12月',
+]
+const enMonthNames = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]
+const checkinStats = computed(() => {
+  const stats = entry.value?.stats
+  if (!stats) {
+    return []
+  }
+  return [
+    { icon: flameIcon, value: stats.current_streak, label: languageStore.t('currentStreak') },
+    { icon: riseIcon, value: stats.longest_streak, label: languageStore.t('longestStreak') },
+    {
+      icon: progressIcon,
+      value: `${Math.round(stats.completion_rate * 100)}%`,
+      label: languageStore.t('completionRate'),
+    },
+    { icon: starIcon, value: stats.total_checkins, label: languageStore.t('totalCheckins') },
+  ]
+})
+
+type ShareTemplate = 'classic' | 'poster' | 'zen' | 'dashboard'
+
+const shareTemplateOptions: Array<{ id: ShareTemplate; labelKey: MessageKey }> = [
+  { id: 'classic', labelKey: 'shareTemplate1' },
+  { id: 'poster', labelKey: 'shareTemplate2' },
+  { id: 'zen', labelKey: 'shareTemplate3' },
+  { id: 'dashboard', labelKey: 'shareTemplate4' },
+]
+
+const sharePreviewStats = Array.from({ length: 4 }, (_, index) => index)
+const sharePreviewBadges = Array.from({ length: 3 }, (_, index) => index)
+const sharePreviewFooterBlocks = Array.from({ length: 5 }, (_, index) => index)
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [entryData, checkinData, badgeData] = await Promise.all([
-      fetchItem(itemId),
-      listCheckins(itemId),
-      fetchItemBadges(itemId),
-    ])
+    const [entryData, checkinData] = await Promise.all([fetchItem(itemId), listCheckins(itemId)])
     entry.value = entryData
     checkins.value = checkinData
-    badges.value = badgeData
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('itemLoadFailed')
+    badges.value = itemBadges(entryData.stats)
+  } catch {
+    error.value = languageStore.t('itemLoadFailed')
   } finally {
     loading.value = false
   }
@@ -62,45 +150,373 @@ async function load() {
 async function checkin() {
   checking.value = true
   error.value = ''
-  success.value = ''
   try {
-    entry.value = await createCheckin(itemId, {
-      note: note.value.trim(),
-    })
+    entry.value = await createCheckin(itemId)
     checkins.value = await listCheckins(itemId)
-    badges.value = await fetchItemBadges(itemId)
-    success.value = languageStore.t('checkinSuccess', { count: entry.value.stats.current_streak })
-    note.value = ''
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('checkinFailed')
+    badges.value = itemBadges(entry.value.stats)
+  } catch {
+    error.value = languageStore.t('checkinFailed')
   } finally {
     checking.value = false
   }
 }
 
-async function downloadShareImage() {
+function dayText(day: HeatmapDay) {
+  return languageStore.t('heatmapTooltip', {
+    date: formatFullDisplayDate(day.date, languageStore.preference),
+    count: day.count,
+    completed: day.completed ? languageStore.t('heatmapCompletedSuffix') : '',
+  })
+}
+
+function itemBadges(stats: DashboardItem['stats']): Badge[] {
+  return [
+    {
+      id: 'first_light',
+      title: '初次点亮',
+      description: '完成第一次签到',
+      level: 'bronze',
+      earned: stats.total_checkins >= 1,
+    },
+    {
+      id: 'week_streak',
+      title: '七日连光',
+      description: '最长连续签到达到 7 天',
+      level: 'silver',
+      earned: stats.longest_streak >= 7,
+    },
+    {
+      id: 'month_streak',
+      title: '三十日微光',
+      description: '最长连续签到达到 30 天',
+      level: 'gold',
+      earned: stats.longest_streak >= 30,
+    },
+    {
+      id: 'hundred_lights',
+      title: '百次记录',
+      description: '累计签到达到 100 次',
+      level: 'gold',
+      earned: stats.total_checkins >= 100,
+    },
+    {
+      id: 'steady_flow',
+      title: '稳定节奏',
+      description: '完成率达到 80%',
+      level: 'silver',
+      earned: stats.expected_days >= 7 && stats.completion_rate >= 0.8,
+    },
+  ]
+}
+
+function syncAchievementToggle(event: Event) {
+  achievementsExpanded.value = (event.target as HTMLDetailsElement).open
+}
+
+function openSharePicker() {
+  if (!entry.value || sharing.value) {
+    return
+  }
+  sharePickerOpen.value = true
+}
+
+function closeSharePicker() {
+  if (sharing.value) {
+    return
+  }
+  sharePickerOpen.value = false
+}
+
+function selectShareTemplate(template: ShareTemplate) {
+  selectedShareTemplate.value = template
+}
+
+function confirmShareTemplate() {
+  sharePickerOpen.value = false
+  void downloadShareImage(selectedShareTemplate.value)
+}
+
+async function downloadShareImage(template: ShareTemplate) {
   if (!item.value) {
     return
   }
   sharing.value = true
   error.value = ''
-  success.value = ''
   try {
-    const share = await fetchItemShare(itemId)
-    const dataUrl = await renderShareImage(share)
+    if (!entry.value) {
+      return
+    }
+    const share: SharePayload = {
+      item: entry.value.item,
+      stats: entry.value.stats,
+      heatmap: entry.value.heatmap,
+      today_count: entry.value.today_count,
+      badges: itemBadges(entry.value.stats),
+    }
+    const dataUrl = await renderShareImage(share, template)
     const link = document.createElement('a')
     link.href = dataUrl
-    link.download = `lumalog-${share.item.name}-${todayString()}.png`
+    link.download = `lumalog-${share.item.name}-${template}-${todayString()}.png`
     link.click()
-    // success.value = languageStore.t('shareDownloaded')
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('shareFailed')
+  } catch {
+    error.value = languageStore.t('shareFailed')
   } finally {
     sharing.value = false
   }
 }
 
-async function renderShareImage(share: SharePayload) {
+function sharePreviewCellCount(template: ShareTemplate) {
+  switch (template) {
+    case 'classic':
+    case 'zen':
+      return 60
+    case 'poster':
+    case 'dashboard':
+      return 72
+    default:
+      return 60
+  }
+}
+
+function shareTemplateNumber(index: number) {
+  return languageStore.preference === 'en' ? `Template ${index + 1}` : `模板 ${index + 1}`
+}
+
+function shareTemplateName(option: { labelKey: MessageKey }) {
+  return (
+    languageStore.t(option.labelKey).split('·').at(-1)?.trim() ?? languageStore.t(option.labelKey)
+  )
+}
+
+function sharePreviewLevel(index: number, template: ShareTemplate) {
+  const seeds: Record<ShareTemplate, number> = {
+    classic: 3,
+    poster: 7,
+    zen: 11,
+    dashboard: 13,
+  }
+  const seed = seeds[template]
+  if ((index + seed) % 5 === 0 || (index * seed) % 17 === 0) {
+    return 3
+  }
+  if ((index + seed) % 3 === 0 || (index * seed) % 11 === 0) {
+    return 2
+  }
+  if ((index + seed) % 4 === 0) {
+    return 1
+  }
+  return 0
+}
+
+async function renderClassicShareImage(share: SharePayload) {
+  const canvas = document.createElement('canvas')
+  const scale = 2
+  const width = 1600
+  const height = 1200
+  canvas.width = width * scale
+  canvas.height = height * scale
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error(languageStore.t('shareFailed'))
+  }
+
+  const accent = themeColor(share.item.color_theme)
+  const textColor = '#121a28'
+  const mutedColor = '#5f6b7a'
+  const softTextColor = '#718096'
+  const emptyColor = rgbaFromHex(accent, 0.1)
+  const cardX = 36
+  const cardY = 58
+  const cardWidth = width - cardX * 2
+  const cardHeight = 1034
+
+  ctx.scale(scale, scale)
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = '#f7f8fa'
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.fillStyle = '#ffffff'
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 36)
+  ctx.fill()
+  ctx.strokeStyle = rgbaFromHex(accent, 0.36)
+  ctx.lineWidth = 1.5
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 36)
+  ctx.stroke()
+
+  await drawClassicHabitIcon(ctx, share.item.icon_key, accent, 92, 104, 136)
+
+  drawFittedCanvasText(ctx, share.item.name, 288, 165, 860, 56, 760, textColor)
+
+  const categoryLabel = share.item.category_name
+    ? languageStore.categoryName(share.item.category_name)
+    : languageStore.t('uncategorized')
+  ctx.font = canvasFont(28, 760)
+  ctx.fillStyle = accent
+  ctx.fillText(categoryLabel, 270, 226)
+  const categoryWidth = ctx.measureText(categoryLabel).width
+  ctx.fillStyle = mutedColor
+  ctx.font = canvasFont(28, 700)
+  ctx.fillText(` / 连续 ${share.stats.current_streak} 天`, 270 + categoryWidth, 226)
+
+  drawClassicShareStats(ctx, share, accent, mutedColor)
+  drawClassicShareHeatmap(ctx, share, accent, emptyColor, mutedColor)
+  await drawClassicShareBadges(ctx, share.badges, accent, textColor, mutedColor)
+  drawClassicShareFooter(ctx, accent, mutedColor)
+
+  return canvas.toDataURL('image/png')
+}
+
+async function renderPosterShareImage(share: SharePayload) {
+  const canvas = document.createElement('canvas')
+  const scale = 2
+  const width = 1600
+  const height = 1200
+  canvas.width = width * scale
+  canvas.height = height * scale
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error(languageStore.t('shareFailed'))
+  }
+
+  const accent = themeColor(share.item.color_theme)
+  const textColor = '#121a28'
+  const mutedColor = '#5f6b7a'
+  const emptyColor = rgbaFromHex(accent, 0.1)
+  const cardX = 36
+  const cardY = 36
+  const cardWidth = width - cardX * 2
+  const cardHeight = 1042
+
+  ctx.scale(scale, scale)
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = '#fbfcfb'
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.save()
+  ctx.shadowColor = 'rgba(20, 40, 30, 0.12)'
+  ctx.shadowBlur = 18
+  ctx.shadowOffsetY = 8
+  ctx.fillStyle = '#fbfffc'
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 34)
+  ctx.fill()
+  ctx.restore()
+
+  ctx.save()
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 34)
+  ctx.clip()
+  drawPosterDotPattern(ctx, cardX + 26, cardY + 24, cardWidth - 52, cardHeight - 48, accent)
+  drawPosterPlantWatermark(ctx, accent)
+  ctx.restore()
+
+  ctx.strokeStyle = rgbaFromHex(accent, 0.7)
+  ctx.lineWidth = 1.5
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, 34)
+  ctx.stroke()
+
+  await drawPosterHabitIcon(ctx, share.item.icon_key, accent, 108, 138, 70)
+  drawFittedCanvasText(ctx, share.item.name, 232, 202, 570, 66, 820, textColor)
+
+  const categoryLabel = share.item.category_name
+    ? languageStore.categoryName(share.item.category_name)
+    : languageStore.t('uncategorized')
+  ctx.font = canvasFont(34, 760)
+  ctx.fillStyle = accent
+  ctx.fillText(`${categoryLabel} / 连续 ${share.stats.current_streak} 天`, 98, 270)
+
+  drawPosterShareStats(ctx, share, accent, mutedColor)
+  drawPosterShareHeatmap(ctx, share, accent, emptyColor, mutedColor)
+  await drawPosterShareBadges(ctx, share.badges, accent, textColor, mutedColor)
+  drawPosterShareFooter(ctx, textColor, mutedColor)
+
+  return canvas.toDataURL('image/png')
+}
+
+async function renderZenShareImage(share: SharePayload) {
+  const canvas = document.createElement('canvas')
+  const scale = 2
+  const width = 1240
+  const height = 1240
+  canvas.width = width * scale
+  canvas.height = height * scale
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error(languageStore.t('shareFailed'))
+  }
+
+  const accent = themeColor(share.item.color_theme)
+  const textColor = '#121a28'
+  const mutedColor = '#5f6b7a'
+  const emptyColor = rgbaFromHex(accent, 0.1)
+  const cardX = 40
+  const cardY = 74
+  const cardWidth = 1160
+  const cardHeight = 1114
+  const cardRadius = 42
+
+  ctx.scale(scale, scale)
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = '#f5f7f8'
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.save()
+  ctx.shadowColor = 'rgba(20, 40, 30, 0.08)'
+  ctx.shadowBlur = 18
+  ctx.shadowOffsetY = 8
+  ctx.fillStyle = '#fbfffc'
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, cardRadius)
+  ctx.fill()
+  ctx.restore()
+
+  ctx.save()
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, cardRadius)
+  ctx.clip()
+  drawZenBottomWash(ctx, accent, cardX, cardY, cardWidth, cardHeight)
+  ctx.restore()
+
+  ctx.strokeStyle = rgbaFromHex(accent, 0.26)
+  ctx.lineWidth = 1.2
+  roundedRect(ctx, cardX, cardY, cardWidth, cardHeight, cardRadius)
+  ctx.stroke()
+
+  drawZenLeaves(ctx, accent)
+  await drawZenHabitIcon(ctx, share.item.icon_key, accent)
+
+  drawCenteredFittedCanvasText(ctx, share.item.name, 620, 390, 780, 58, 34, 820, textColor)
+
+  const categoryLabel = share.item.category_name
+    ? languageStore.categoryName(share.item.category_name)
+    : languageStore.t('uncategorized')
+  drawCenteredFittedCanvasText(
+    ctx,
+    `${categoryLabel} / 连续 ${share.stats.current_streak} 天`,
+    620,
+    438,
+    650,
+    31,
+    20,
+    760,
+    accent,
+  )
+
+  drawZenShareStats(ctx, share, accent, mutedColor)
+  drawZenShareHeatmap(ctx, share, accent, emptyColor, mutedColor)
+  await drawZenShareBadges(ctx, share.badges, accent, textColor, mutedColor)
+  drawZenShareFooter(ctx, textColor, mutedColor)
+
+  return canvas.toDataURL('image/png')
+}
+
+async function renderShareImage(share: SharePayload, template: ShareTemplate) {
+  if (template === 'classic') {
+    return renderClassicShareImage(share)
+  }
+  if (template === 'poster') {
+    return renderPosterShareImage(share)
+  }
+  if (template === 'zen') {
+    return renderZenShareImage(share)
+  }
+
   const canvas = document.createElement('canvas')
   const scale = 2
   const width = 960
@@ -167,7 +583,11 @@ async function renderShareImage(share: SharePayload) {
       }
       const x = gridLeft + weekIndex * (cell + gap)
       const y = gridTop + dayIndex * (cell + gap)
-      ctx.fillStyle = canvasHeatmapLevelColor(share.item.color_theme, day.level, palette.squareEmpty)
+      ctx.fillStyle = canvasHeatmapLevelColor(
+        share.item.color_theme,
+        day.level,
+        palette.squareEmpty,
+      )
       roundedRect(ctx, x, y, cell, cell, Math.min(3, cell / 3))
       ctx.fill()
     })
@@ -175,11 +595,854 @@ async function renderShareImage(share: SharePayload) {
 
   ctx.fillStyle = palette.muted
   ctx.font = '500 16px system-ui, sans-serif'
-  ctx.fillText(`${languageStore.t('heatmapLabel')} · ${columns} weeks`, gridLeft, gridTop + gridHeight + 28)
+  ctx.fillText(
+    `${languageStore.t('heatmapLabel')} · ${columns} weeks`,
+    gridLeft,
+    gridTop + gridHeight + 28,
+  )
 
   await drawShareBadges(ctx, share.badges, palette, gridTop + gridHeight + 68)
 
   return canvas.toDataURL('image/png')
+}
+
+function canvasFont(size: number, weight: number | string = 500) {
+  return `${weight} ${size}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+}
+
+function drawFittedCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  size: number,
+  weight: number | string,
+  color: string,
+) {
+  let fontSize = size
+  ctx.fillStyle = color
+  ctx.font = canvasFont(fontSize, weight)
+  while (fontSize > 28 && ctx.measureText(text).width > maxWidth) {
+    fontSize -= 2
+    ctx.font = canvasFont(fontSize, weight)
+  }
+  ctx.fillText(text, x, y)
+}
+
+function drawCenteredFittedCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  centerX: number,
+  y: number,
+  maxWidth: number,
+  size: number,
+  minSize: number,
+  weight: number | string,
+  color: string,
+) {
+  let fontSize = size
+  ctx.fillStyle = color
+  ctx.textAlign = 'center'
+  ctx.font = canvasFont(fontSize, weight)
+  while (fontSize > minSize && ctx.measureText(text).width > maxWidth) {
+    fontSize -= 1
+    ctx.font = canvasFont(fontSize, weight)
+  }
+  ctx.fillText(text, centerX, y)
+}
+
+async function drawClassicHabitIcon(
+  ctx: CanvasRenderingContext2D,
+  iconKey: string | undefined,
+  accent: string,
+  x: number,
+  y: number,
+  size: number,
+) {
+  const gradient = ctx.createLinearGradient(x, y, x + size, y + size)
+  gradient.addColorStop(0, rgbaFromHex(accent, 0.12))
+  gradient.addColorStop(1, rgbaFromHex(accent, 0.04))
+
+  ctx.fillStyle = gradient
+  roundedRect(ctx, x, y, size, size, 30)
+  ctx.fill()
+  ctx.strokeStyle = rgbaFromHex(accent, 0.08)
+  ctx.lineWidth = 1
+  roundedRect(ctx, x, y, size, size, 30)
+  ctx.stroke()
+
+  const glyph = await canvasIconGlyph(iconKey)
+  if (glyph) {
+    ctx.save()
+    ctx.fillStyle = accent
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = '68px iconfont'
+    ctx.fillText(glyph, x + size / 2, y + size / 2 + 2)
+    ctx.restore()
+    return
+  }
+
+  drawFallbackHabitIcon(ctx, accent, x + size / 2, y + size / 2)
+}
+
+async function canvasIconGlyph(iconKey: string | undefined) {
+  try {
+    await document.fonts?.ready
+    const probe = document.createElement('i')
+    probe.className = `iconfont ${lumaIconClass(iconKey)}`
+    probe.style.position = 'absolute'
+    probe.style.left = '-9999px'
+    probe.style.top = '-9999px'
+    probe.style.opacity = '0'
+    document.body.appendChild(probe)
+    const content = getComputedStyle(probe, '::before').content
+    probe.remove()
+    return decodeCssContent(content)
+  } catch {
+    return ''
+  }
+}
+
+function decodeCssContent(content: string) {
+  const trimmed = content.trim()
+  if (!trimmed || trimmed === 'none' || trimmed === 'normal') {
+    return ''
+  }
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed
+  return unquoted.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex: string) =>
+    String.fromCodePoint(Number.parseInt(hex, 16)),
+  )
+}
+
+function drawFallbackHabitIcon(ctx: CanvasRenderingContext2D, accent: string, centerX: number, centerY: number) {
+  ctx.save()
+  ctx.strokeStyle = accent
+  ctx.lineWidth = 5
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+
+  roundedRect(ctx, centerX - 32, centerY - 30, 64, 48, 7)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(centerX - 20, centerY + 2)
+  ctx.lineTo(centerX - 6, centerY - 10)
+  ctx.lineTo(centerX + 6, centerY - 2)
+  ctx.lineTo(centerX + 21, centerY - 19)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(centerX, centerY + 20)
+  ctx.lineTo(centerX, centerY + 34)
+  ctx.moveTo(centerX - 20, centerY + 34)
+  ctx.lineTo(centerX + 20, centerY + 34)
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawPosterDotPattern(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  accent: string,
+) {
+  ctx.save()
+  ctx.fillStyle = rgbaFromHex(accent, 0.08)
+  for (let dotY = y; dotY <= y + height; dotY += 12) {
+    for (let dotX = x; dotX <= x + width; dotX += 12) {
+      ctx.beginPath()
+      ctx.arc(dotX, dotY, 0.8, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+  ctx.restore()
+}
+
+function drawPosterPlantWatermark(ctx: CanvasRenderingContext2D, accent: string) {
+  ctx.save()
+  ctx.globalAlpha = 0.1
+  ctx.fillStyle = accent
+  drawLeaf(ctx, 1270, 865, 1460, 815, 1418, 958, 1194, 832)
+  drawLeaf(ctx, 1388, 902, 1545, 742, 1570, 922, 1360, 922)
+  drawLeaf(ctx, 1315, 940, 1542, 978, 1358, 1082, 1184, 1018)
+
+  ctx.globalAlpha = 0.12
+  ctx.strokeStyle = accent
+  ctx.lineWidth = 4
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(1346, 842)
+  ctx.bezierCurveTo(1384, 906, 1438, 962, 1432, 1080)
+  ctx.stroke()
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  ctx.moveTo(1276, 862)
+  ctx.lineTo(1398, 940)
+  ctx.moveTo(1455, 816)
+  ctx.lineTo(1370, 888)
+  ctx.moveTo(1280, 1006)
+  ctx.lineTo(1450, 992)
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawLeaf(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  x3: number,
+  y3: number,
+  x4: number,
+  y4: number,
+) {
+  ctx.beginPath()
+  ctx.moveTo(x1, y1)
+  ctx.bezierCurveTo(x2, y2, x3, y3, x4, y4)
+  ctx.bezierCurveTo(x3 - 60, y3 - 8, x2 - 80, y2 + 70, x1, y1)
+  ctx.closePath()
+  ctx.fill()
+}
+
+async function drawPosterHabitIcon(
+  ctx: CanvasRenderingContext2D,
+  iconKey: string | undefined,
+  accent: string,
+  x: number,
+  y: number,
+  size: number,
+) {
+  const glyph = await canvasIconGlyph(iconKey)
+  if (glyph) {
+    ctx.save()
+    ctx.fillStyle = accent
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = `${size}px iconfont`
+    ctx.fillText(glyph, x + size / 2, y + size / 2 + 3)
+    ctx.restore()
+    return
+  }
+
+  drawFallbackHabitIcon(ctx, accent, x + size / 2, y + size / 2)
+}
+
+function drawPosterShareStats(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  mutedColor: string,
+) {
+  const stats = [
+    { label: languageStore.t('currentStreak'), value: share.stats.current_streak },
+    { label: languageStore.t('longestStreak'), value: share.stats.longest_streak },
+    {
+      label: languageStore.t('completionRate'),
+      value: `${Math.round(share.stats.completion_rate * 100)}%`,
+    },
+    { label: languageStore.t('totalCheckins'), value: share.stats.total_checkins },
+  ]
+  const centers = [858, 1040, 1228, 1418]
+  const dividers = [950, 1138, 1324]
+
+  ctx.save()
+  ctx.strokeStyle = '#dce6df'
+  ctx.lineWidth = 1
+  dividers.forEach((x) => {
+    ctx.beginPath()
+    ctx.moveTo(x, 130)
+    ctx.lineTo(x, 256)
+    ctx.stroke()
+  })
+
+  ctx.textAlign = 'center'
+  stats.forEach((stat, index) => {
+    const center = centers[index] ?? 858
+    ctx.fillStyle = accent
+    ctx.font = canvasFont(48, 780)
+    ctx.fillText(String(stat.value), center, 184)
+    drawCenteredFittedCanvasText(ctx, stat.label, center, 236, 154, 28, 18, 760, mutedColor)
+  })
+  ctx.restore()
+}
+
+function drawPosterShareHeatmap(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  emptyColor: string,
+  mutedColor: string,
+) {
+  const visibleValues = share.heatmap.length > 153 ? share.heatmap.slice(-153) : share.heatmap
+  const heatmapWeeks = buildShareHeatmapWeeks(visibleValues)
+  const columns = heatmapWeeks.length
+  if (columns === 0) {
+    return
+  }
+
+  const monthLabels = buildShareMonthLabels(heatmapWeeks)
+  const gridLeft = 94
+  const gridTop = 346
+  const gridWidth = 1368
+  const gap = 12
+  const cell = (gridWidth - (columns - 1) * gap) / columns
+
+  ctx.fillStyle = mutedColor
+  ctx.font = canvasFont(23, 760)
+  monthLabels.forEach((month) => {
+    ctx.fillText(month.label, gridLeft + month.index * (cell + gap), 324)
+  })
+
+  heatmapWeeks.forEach((week, weekIndex) => {
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const day = week[dayIndex]
+      const x = gridLeft + weekIndex * (cell + gap)
+      const y = gridTop + dayIndex * (cell + gap)
+      ctx.fillStyle =
+        day && day.level > 0
+          ? canvasHeatmapLevelColor(share.item.color_theme, day.level, emptyColor)
+          : emptyColor
+      roundedRect(ctx, x, y, cell, cell, Math.min(7, cell / 5))
+      ctx.fill()
+    }
+  })
+}
+
+async function drawPosterShareBadges(
+  ctx: CanvasRenderingContext2D,
+  badges: Badge[],
+  accent: string,
+  textColor: string,
+  mutedColor: string,
+) {
+  const earned = badges.filter((badge) => badge.earned).slice(0, 2)
+  if (earned.length === 0) {
+    return
+  }
+
+  const cardTop = 808
+  const cardLeft = 94
+  const cardWidth = 292
+  const cardHeight = 118
+  const gap = 36
+  const iconSize = 48
+  const images = await Promise.all(
+    earned.map((badge) => loadCanvasImage(badgeImage(badge.id)).catch(() => null)),
+  )
+
+  earned.forEach((badge, index) => {
+    const x = cardLeft + index * (cardWidth + gap)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.82)'
+    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 15)
+    ctx.fill()
+    ctx.strokeStyle = rgbaFromHex(accent, 0.16)
+    ctx.lineWidth = 1.2
+    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 15)
+    ctx.stroke()
+
+    const image = images[index]
+    if (image) {
+      ctx.drawImage(image, x + 34, cardTop + 34, iconSize, iconSize)
+    } else {
+      ctx.fillStyle = rgbaFromHex(accent, 0.12)
+      roundedRect(ctx, x + 34, cardTop + 34, iconSize, iconSize, iconSize / 2)
+      ctx.fill()
+    }
+
+    ctx.fillStyle = textColor
+    ctx.font = canvasFont(27, 760)
+    ctx.fillText(badge.title, x + 146, cardTop + 52)
+    ctx.fillStyle = mutedColor
+    ctx.font = canvasFont(19, 650)
+    ctx.fillText(classicBadgeSubtitle(badge), x + 146, cardTop + 88)
+  })
+}
+
+function drawPosterShareFooter(ctx: CanvasRenderingContext2D, textColor: string, mutedColor: string) {
+  const y = 1012
+  let x = 92
+  ctx.font = canvasFont(28, 800)
+  ctx.fillStyle = textColor
+  ctx.fillText('LumaLog', x, y)
+  x += ctx.measureText('LumaLog').width + 12
+  ctx.fillStyle = mutedColor
+  ctx.fillText('/ ', x, y)
+  x += ctx.measureText('/ ').width
+  ctx.font = canvasFont(28, 760)
+  ctx.fillText(languageStore.t('checkinHeatmap'), x, y)
+}
+
+function drawZenBottomWash(
+  ctx: CanvasRenderingContext2D,
+  accent: string,
+  cardX: number,
+  cardY: number,
+  cardWidth: number,
+  cardHeight: number,
+) {
+  const bottom = cardY + cardHeight
+  const right = cardX + cardWidth
+
+  ctx.save()
+  ctx.fillStyle = rgbaFromHex(accent, 0.12)
+  ctx.beginPath()
+  ctx.moveTo(cardX, bottom - 126)
+  ctx.bezierCurveTo(cardX + 210, bottom - 158, cardX + 348, bottom - 70, cardX + 562, bottom - 103)
+  ctx.bezierCurveTo(cardX + 760, bottom - 132, right - 220, bottom - 168, right, bottom - 118)
+  ctx.lineTo(right, bottom)
+  ctx.lineTo(cardX, bottom)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = rgbaFromHex(accent, 0.08)
+  ctx.beginPath()
+  ctx.moveTo(cardX, bottom - 83)
+  ctx.bezierCurveTo(cardX + 260, bottom - 43, cardX + 416, bottom - 108, cardX + 650, bottom - 72)
+  ctx.bezierCurveTo(cardX + 820, bottom - 45, right - 212, bottom - 112, right, bottom - 88)
+  ctx.lineTo(right, bottom)
+  ctx.lineTo(cardX, bottom)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.strokeStyle = rgbaFromHex(accent, 0.08)
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(cardX, bottom - 137)
+  ctx.bezierCurveTo(cardX + 240, bottom - 164, cardX + 384, bottom - 115, cardX + 602, bottom - 132)
+  ctx.bezierCurveTo(cardX + 778, bottom - 147, right - 238, bottom - 161, right, bottom - 168)
+  ctx.stroke()
+
+  ctx.strokeStyle = rgbaFromHex(accent, 0.06)
+  ctx.lineWidth = 1.4
+  ctx.beginPath()
+  ctx.moveTo(cardX, bottom - 101)
+  ctx.bezierCurveTo(cardX + 206, bottom - 130, cardX + 382, bottom - 76, cardX + 588, bottom - 95)
+  ctx.bezierCurveTo(cardX + 750, bottom - 111, right - 254, bottom - 93, right, bottom - 111)
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawZenLeaves(ctx: CanvasRenderingContext2D, accent: string) {
+  drawZenLeaf(ctx, accent, 370, 200, -0.34, 0.92, 0.24)
+  drawZenLeaf(ctx, accent, 436, 256, 0.7, 1.05, 0.18)
+  drawZenLeaf(ctx, accent, 776, 239, -0.08, 0.88, 0.18)
+  drawZenLeaf(ctx, accent, 856, 202, -0.62, 0.72, 0.2)
+  drawZenLeaf(ctx, accent, 930, 135, 0, 0.48, 0.18)
+}
+
+function drawZenLeaf(
+  ctx: CanvasRenderingContext2D,
+  accent: string,
+  centerX: number,
+  centerY: number,
+  angle: number,
+  scale: number,
+  alpha: number,
+) {
+  ctx.save()
+  ctx.translate(centerX, centerY)
+  ctx.rotate(angle)
+  ctx.scale(scale, scale)
+  ctx.fillStyle = rgbaFromHex(accent, alpha)
+  ctx.beginPath()
+  ctx.moveTo(-22, 0)
+  ctx.bezierCurveTo(-7, -17, 19, -17, 32, 1)
+  ctx.bezierCurveTo(12, 13, -7, 13, -22, 0)
+  ctx.closePath()
+  ctx.fill()
+  ctx.strokeStyle = rgbaFromHex(accent, alpha * 0.75)
+  ctx.lineWidth = 1.3
+  ctx.beginPath()
+  ctx.moveTo(-14, 0)
+  ctx.quadraticCurveTo(4, -2, 22, 2)
+  ctx.stroke()
+  ctx.restore()
+}
+
+async function drawZenHabitIcon(
+  ctx: CanvasRenderingContext2D,
+  iconKey: string | undefined,
+  accent: string,
+) {
+  const centerX = 620
+  const centerY = 208
+  const radius = 96
+  const gradient = ctx.createRadialGradient(centerX - 18, centerY - 22, 12, centerX, centerY, radius)
+  gradient.addColorStop(0, rgbaFromHex(accent, 0.16))
+  gradient.addColorStop(1, rgbaFromHex(accent, 0.06))
+
+  ctx.save()
+  ctx.fillStyle = gradient
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.strokeStyle = rgbaFromHex(accent, 0.1)
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+
+  const glyph = await canvasIconGlyph(iconKey)
+  if (glyph) {
+    ctx.save()
+    ctx.fillStyle = accent
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = '84px iconfont'
+    ctx.fillText(glyph, centerX, centerY + 4)
+    ctx.restore()
+    return
+  }
+
+  drawFallbackHabitIcon(ctx, accent, centerX, centerY)
+}
+
+function drawZenShareStats(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  mutedColor: string,
+) {
+  const stats = [
+    { label: languageStore.t('currentStreak'), value: share.stats.current_streak },
+    { label: languageStore.t('longestStreak'), value: share.stats.longest_streak },
+    {
+      label: languageStore.t('completionRate'),
+      value: `${Math.round(share.stats.completion_rate * 100)}%`,
+    },
+    { label: languageStore.t('totalCheckins'), value: share.stats.total_checkins },
+  ]
+  const panelX = 123
+  const panelY = 464
+  const panelWidth = 994
+  const panelHeight = 108
+  const centers = [248, 496, 744, 992]
+  const dividers = [372, 620, 868]
+
+  ctx.save()
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.78)'
+  roundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 18)
+  ctx.fill()
+  ctx.strokeStyle = rgbaFromHex(accent, 0.18)
+  ctx.lineWidth = 1.1
+  roundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 18)
+  ctx.stroke()
+
+  ctx.strokeStyle = '#dfe8e2'
+  ctx.lineWidth = 1
+  dividers.forEach((x) => {
+    ctx.beginPath()
+    ctx.moveTo(x, panelY + 38)
+    ctx.lineTo(x, panelY + 76)
+    ctx.stroke()
+  })
+
+  ctx.textAlign = 'center'
+  stats.forEach((stat, index) => {
+    const center = centers[index] ?? 248
+    ctx.fillStyle = accent
+    ctx.font = canvasFont(31, 780)
+    ctx.fillText(String(stat.value), center, panelY + 50)
+    drawCenteredFittedCanvasText(ctx, stat.label, center, panelY + 85, 150, 22, 16, 760, mutedColor)
+  })
+  ctx.restore()
+}
+
+function drawZenShareHeatmap(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  emptyColor: string,
+  mutedColor: string,
+) {
+  const visibleValues = share.heatmap.length > 153 ? share.heatmap.slice(-153) : share.heatmap
+  const heatmapWeeks = buildShareHeatmapWeeks(visibleValues)
+  const columns = heatmapWeeks.length
+  if (columns === 0) {
+    return
+  }
+
+  const monthLabels = buildShareMonthLabels(heatmapWeeks)
+  const gridLeft = 124
+  const gridTop = 646
+  const gridWidth = 994
+  const gap = 8
+  const cell = (gridWidth - (columns - 1) * gap) / columns
+
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.fillStyle = mutedColor
+  ctx.font = canvasFont(23, 760)
+  monthLabels.forEach((month) => {
+    ctx.fillText(month.label, gridLeft + month.index * (cell + gap), gridTop - 22)
+  })
+
+  heatmapWeeks.forEach((week, weekIndex) => {
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const day = week[dayIndex]
+      const x = gridLeft + weekIndex * (cell + gap)
+      const y = gridTop + dayIndex * (cell + gap)
+      ctx.fillStyle =
+        day && day.level > 0
+          ? canvasHeatmapLevelColor(share.item.color_theme, day.level, emptyColor)
+          : emptyColor
+      roundedRect(ctx, x, y, cell, cell, Math.min(7, cell / 5))
+      ctx.fill()
+    }
+  })
+  ctx.restore()
+}
+
+async function drawZenShareBadges(
+  ctx: CanvasRenderingContext2D,
+  badges: Badge[],
+  accent: string,
+  textColor: string,
+  mutedColor: string,
+) {
+  const earned = badges.filter((badge) => badge.earned).slice(0, 2)
+  if (earned.length === 0) {
+    return
+  }
+
+  const cardTop = 968
+  const cardLeft = 124
+  const cardWidth = 270
+  const cardHeight = 110
+  const gap = 38
+  const iconSize = 52
+  const images = await Promise.all(
+    earned.map((badge) => loadCanvasImage(badgeImage(badge.id)).catch(() => null)),
+  )
+
+  ctx.save()
+  ctx.textAlign = 'left'
+  earned.forEach((badge, index) => {
+    const x = cardLeft + index * (cardWidth + gap)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.86)'
+    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
+    ctx.fill()
+    ctx.strokeStyle = rgbaFromHex(accent, 0.16)
+    ctx.lineWidth = 1.1
+    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
+    ctx.stroke()
+
+    const image = images[index]
+    if (image) {
+      ctx.drawImage(image, x + 34, cardTop + 29, iconSize, iconSize)
+    } else {
+      ctx.fillStyle = rgbaFromHex(accent, 0.12)
+      roundedRect(ctx, x + 34, cardTop + 29, iconSize, iconSize, iconSize / 2)
+      ctx.fill()
+    }
+
+    drawFittedCanvasText(ctx, badge.title, x + 130, cardTop + 48, 118, 25, 760, textColor)
+    ctx.fillStyle = mutedColor
+    ctx.font = canvasFont(17, 600)
+    ctx.fillText(classicBadgeSubtitle(badge), x + 130, cardTop + 78)
+  })
+  ctx.restore()
+}
+
+function drawZenShareFooter(ctx: CanvasRenderingContext2D, textColor: string, mutedColor: string) {
+  const y = 1126
+  const label = languageStore.t('checkinHeatmap')
+  const slash = ' / '
+
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.font = canvasFont(25, 800)
+  const logoWidth = ctx.measureText('LumaLog').width
+  ctx.font = canvasFont(25, 760)
+  const slashWidth = ctx.measureText(slash).width
+  const labelWidth = ctx.measureText(label).width
+  let x = 620 - (logoWidth + slashWidth + labelWidth) / 2
+
+  ctx.font = canvasFont(25, 800)
+  ctx.fillStyle = textColor
+  ctx.fillText('LumaLog', x, y)
+  x += logoWidth
+  ctx.font = canvasFont(25, 760)
+  ctx.fillStyle = mutedColor
+  ctx.fillText(slash, x, y)
+  x += slashWidth
+  ctx.fillText(label, x, y)
+
+  ctx.textAlign = 'center'
+  ctx.font = canvasFont(20, 600)
+  ctx.fillStyle = mutedColor
+  const tagline =
+    languageStore.preference === 'en'
+      ? 'Track tiny habits · grow with consistency'
+      : '记录微小习惯 · 见证持续成长'
+  ctx.fillText(tagline, 620, 1170)
+  ctx.restore()
+}
+
+function drawClassicShareStats(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  mutedColor: string,
+) {
+  const stats = [
+    { label: languageStore.t('currentStreak'), value: share.stats.current_streak },
+    { label: languageStore.t('longestStreak'), value: share.stats.longest_streak },
+    {
+      label: languageStore.t('completionRate'),
+      value: `${Math.round(share.stats.completion_rate * 100)}%`,
+    },
+    { label: languageStore.t('totalCheckins'), value: share.stats.total_checkins },
+  ]
+  const centers = [250, 600, 950, 1300]
+
+  ctx.save()
+  ctx.strokeStyle = '#e3e8e4'
+  ctx.lineWidth = 1
+  const dividers = [425, 775, 1125]
+  dividers.forEach((x) => {
+    ctx.beginPath()
+    ctx.moveTo(x, 278)
+    ctx.lineTo(x, 354)
+    ctx.stroke()
+  })
+
+  ctx.textAlign = 'center'
+  stats.forEach((stat, index) => {
+    const center = centers[index] ?? 250
+    ctx.fillStyle = accent
+    ctx.font = canvasFont(40, 760)
+    ctx.fillText(String(stat.value), center, 310)
+    ctx.fillStyle = mutedColor
+    ctx.font = canvasFont(24, 700)
+    ctx.fillText(stat.label, center, 358)
+  })
+  ctx.restore()
+}
+
+function drawClassicShareHeatmap(
+  ctx: CanvasRenderingContext2D,
+  share: SharePayload,
+  accent: string,
+  emptyColor: string,
+  mutedColor: string,
+) {
+  const visibleValues = share.heatmap.length > 153 ? share.heatmap.slice(-153) : share.heatmap
+  const heatmapWeeks = buildShareHeatmapWeeks(visibleValues)
+  const columns = heatmapWeeks.length
+  if (columns === 0) {
+    return
+  }
+
+  const monthLabels = buildShareMonthLabels(heatmapWeeks)
+  const gridLeft = 108
+  const gridTop = 430
+  const gridWidth = 1344
+  const gap = 10
+  const cell = (gridWidth - (columns - 1) * gap) / columns
+
+  ctx.fillStyle = mutedColor
+  ctx.font = canvasFont(22, 700)
+  monthLabels.forEach((month) => {
+    ctx.fillText(month.label, gridLeft + month.index * (cell + gap), 410)
+  })
+
+  heatmapWeeks.forEach((week, weekIndex) => {
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const day = week[dayIndex]
+      const x = gridLeft + weekIndex * (cell + gap)
+      const y = gridTop + dayIndex * (cell + gap)
+      ctx.fillStyle =
+        day && day.level > 0
+          ? canvasHeatmapLevelColor(share.item.color_theme, day.level, emptyColor)
+          : emptyColor
+      roundedRect(ctx, x, y, cell, cell, Math.min(8, cell / 5))
+      ctx.fill()
+    }
+  })
+}
+
+async function drawClassicShareBadges(
+  ctx: CanvasRenderingContext2D,
+  badges: Badge[],
+  accent: string,
+  textColor: string,
+  mutedColor: string,
+) {
+  const earned = badges.filter((badge) => badge.earned).slice(0, 2)
+  if (earned.length === 0) {
+    return
+  }
+
+  const cardTop = 868
+  const cardLeft = 92
+  const cardWidth = 264
+  const cardHeight = 86
+  const gap = 26
+  const iconSize = 46
+  const images = await Promise.all(
+    earned.map((badge) => loadCanvasImage(badgeImage(badge.id)).catch(() => null)),
+  )
+
+  earned.forEach((badge, index) => {
+    const x = cardLeft + index * (cardWidth + gap)
+    ctx.fillStyle = '#ffffff'
+    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
+    ctx.fill()
+    ctx.strokeStyle = '#e6eee9'
+    ctx.lineWidth = 1
+    roundedRect(ctx, x, cardTop, cardWidth, cardHeight, 16)
+    ctx.stroke()
+
+    const image = images[index]
+    if (image) {
+      ctx.drawImage(image, x + 32, cardTop + 20, iconSize, iconSize)
+    } else {
+      ctx.fillStyle = rgbaFromHex(accent, 0.12)
+      roundedRect(ctx, x + 32, cardTop + 20, iconSize, iconSize, iconSize / 2)
+      ctx.fill()
+    }
+
+    ctx.fillStyle = textColor
+    ctx.font = canvasFont(25, 760)
+    ctx.fillText(badge.title, x + 118, cardTop + 40)
+    ctx.fillStyle = mutedColor
+    ctx.font = canvasFont(17, 600)
+    ctx.fillText(classicBadgeSubtitle(badge), x + 118, cardTop + 66)
+  })
+}
+
+function classicBadgeSubtitle(badge: Badge) {
+  const subtitles: Record<string, string> = {
+    first_light: '点亮第一天',
+    week_streak: '连续点亮 7 天',
+    month_streak: '连续点亮 30 天',
+    hundred_lights: '累计记录 100 次',
+    steady_flow: '完成率达到 80%',
+  }
+  return subtitles[badge.id] ?? badge.description
+}
+
+function drawClassicShareFooter(ctx: CanvasRenderingContext2D, accent: string, mutedColor: string) {
+  const y = 1028
+  let x = 92
+  ctx.font = canvasFont(25, 760)
+  ctx.fillStyle = accent
+  ctx.fillText('LumaLog', x, y)
+  x += ctx.measureText('LumaLog').width + 10
+  ctx.fillStyle = mutedColor
+  ctx.fillText('/ ', x, y)
+  x += ctx.measureText('/ ').width
+  ctx.font = canvasFont(25, 700)
+  ctx.fillText(languageStore.t('checkinHeatmap'), x, y)
 }
 
 function buildShareHeatmapWeeks(values: HeatmapDay[]) {
@@ -219,7 +1482,8 @@ function buildShareMonthLabels(weeks: Array<Array<HeatmapDay | null>>) {
   const lastValue = visibleDays.at(-1)
   const spansMultipleYears = firstValue
     ? Boolean(lastValue) &&
-      parseLocalDate(firstValue.date).getFullYear() !== parseLocalDate(lastValue?.date ?? firstValue.date).getFullYear()
+      parseLocalDate(firstValue.date).getFullYear() !==
+        parseLocalDate(lastValue?.date ?? firstValue.date).getFullYear()
     : false
   const seenMonths = new Set<string>()
 
@@ -336,7 +1600,14 @@ function loadCanvasImage(src: string) {
   })
 }
 
-function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+function roundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
   ctx.beginPath()
   ctx.moveTo(x + radius, y)
   ctx.arcTo(x + width, y, x + width, y + height, radius)
@@ -350,274 +1621,1168 @@ onMounted(load)
 </script>
 
 <template>
-  <main class="checkin-page">
-    <header class="topbar checkin-topbar">
-      <RouterLink class="button secondary" to="/">{{ languageStore.t('backHome') }}</RouterLink>
-      <button class="button secondary" type="button" :disabled="loading || sharing" @click="downloadShareImage">
+  <main class="checkin-page" :style="{ '--item-accent': accent }">
+    <header class="screen-topbar checkin-topbar">
+      <RouterLink class="back-link screen-topbar-left" to="/">←</RouterLink>
+      <span class="screen-topbar-title">{{ languageStore.t('checkinAction') }}</span>
+      <button
+        class="share-link screen-topbar-right"
+        type="button"
+        :disabled="loading || sharing"
+        @click="openSharePicker"
+      >
         {{ sharing ? languageStore.t('saveLoading') : languageStore.t('generateShare') }}
       </button>
     </header>
 
     <div v-if="loading" class="loading">{{ languageStore.t('loading') }}</div>
-    <section v-else-if="entry && item" class="checkin-stage">
-      <p class="category-line">{{ item.category_name }}</p>
-      <h1>{{ item.name }}</h1>
+    <section v-else-if="entry && item" class="checkin-stack">
+      <section class="habit-identity app-card">
+        <LumaIconBadge :icon-key="item.icon_key" :accent="accent" :size="64" />
+        <div class="habit-identity-main">
+          <div class="habit-title-row">
+            <h1>{{ item.name }}</h1>
+            <span class="category-chip">
+              {{
+                item.category_name
+                  ? languageStore.categoryName(item.category_name)
+                  : languageStore.t('uncategorized')
+              }}
+            </span>
+          </div>
+          <p v-if="item.description">{{ item.description }}</p>
+        </div>
+      </section>
 
       <CheckinButton
         :status="entry.status"
         :today-count="entry.today_count"
         :target="item.daily_target_count"
         :loading="checking"
+        :allow-makeup="item.allow_makeup"
         @checkin="checkin"
+        @makeup="router.push(`/items/${item.id}/makeup`)"
       />
 
-      <div class="checkin-compose">
-        <label class="field">
-          <!-- <span>{{ languageStore.t('note') }}</span> -->
-          <textarea
-            v-model="note"
-            class="textarea"
-            maxlength="160"
-            :placeholder="languageStore.t('notePlaceholder')"
-          />
-        </label>
-      </div>
+      <section class="checkin-stats app-card">
+        <div v-for="(stat, index) in checkinStats" :key="stat.label" class="checkin-stat">
+          <div class="stat-value">
+            <SvgIcon :src="stat.icon" :size="13" />
+            <strong>{{ stat.value }}</strong>
+          </div>
+          <span>{{ stat.label }}</span>
+          <i v-if="index < checkinStats.length - 1" />
+        </div>
+      </section>
 
-      <div class="checkin-meta">
-        <span>{{ statusText(entry.status, languageStore.preference) }}</span>
-        <span>{{ timeHint }}</span>
-        <span>{{ languageStore.t('streakDays', { count: entry.stats.current_streak }) }}</span>
-      </div>
-
-      <div v-if="item.allow_makeup" class="topbar-actions">
-        <RouterLink v-if="item.allow_makeup" class="button secondary" :to="`/items/${item.id}/makeup`">
-          {{ languageStore.t('makeupEntry') }}
-        </RouterLink>
-      </div>
-
-      <p v-if="success" class="success">{{ success }}</p>
       <p v-if="error" class="error">{{ error }}</p>
 
-      <section v-if="earnedBadges.length > 0" class="checkin-panel card">
-        <div class="panel-heading">{{ languageStore.t('earnedBadges') }}</div>
-        <div class="badge-list">
+      <section class="heatmap-panel app-card">
+        <div class="heatmap-heading">
+          <strong>{{ languageStore.t('checkinHeatmap') }}</strong>
+          <div class="heatmap-legend">
+            <span>{{ languageStore.t('heatmapLess') }}</span>
+            <i
+              v-for="level in [0, 1, 2, 3, 4]"
+              :key="level"
+              :style="{ backgroundColor: heatmapLevelColor(item.color_theme, level) }"
+            />
+            <span>{{ languageStore.t('heatmapMore') }}</span>
+          </div>
+        </div>
+        <ContributionHeatmap
+          :values="entry.heatmap"
+          :color-theme="item.color_theme"
+          :max-days="153"
+          :selected-dates="[today]"
+          :makeup-dates="makeupDates"
+          :day-labels="heatmapDayLabels"
+        />
+      </section>
+
+      <details
+        class="achievement-panel app-card"
+        :open="achievementsExpanded"
+        @toggle="syncAchievementToggle"
+      >
+        <summary class="achievement-summary">
+          <span class="achievement-icon-wrap">
+            <SvgIcon :src="achievementIcon" :size="15" />
+          </span>
+          <span class="achievement-copy">
+            <strong>{{ languageStore.t('earnedAchievements') }}</strong>
+            <em>{{ languageStore.t('achievementCount', { count: earnedBadges.length }) }}</em>
+          </span>
+          <SvgIcon class="fold-icon" :src="foldIcon" :size="14" />
+        </summary>
+        <p v-if="earnedBadges.length === 0" class="muted">
+          {{ languageStore.t('noEarnedBadges') }}
+        </p>
+        <div v-else class="badge-list">
           <span
             v-for="badge in earnedBadges"
             :key="badge.id"
             class="achievement-badge"
-            :class="badge.level"
             :title="badge.description"
           >
             <img class="achievement-badge-image" :src="badgeImage(badge.id)" :alt="badge.title" />
             <span class="achievement-badge-label">{{ badge.title }}</span>
           </span>
         </div>
-      </section>
-
-      <div class="mini-heatmap card">
-        <ContributionHeatmap :values="entry.heatmap" :color-theme="item.color_theme" />
-      </div>
-
-      <details class="checkin-panel card">
-        <summary class="panel-heading record-summary">
-          <span>{{ languageStore.t('checkinRecords') }}</span>
-          <span>{{ checkins.length }}</span>
-        </summary>
-        <p v-if="checkins.length === 0" class="muted">{{ languageStore.t('noCheckinRecords') }}</p>
-        <div v-else class="record-list">
-          <div v-for="record in checkins.slice(0, 8)" :key="record.id" class="record-row">
-            <div>
-              <strong>{{ formatFullDisplayDate(record.checkin_date, languageStore.preference) }}</strong>
-              <span>{{ record.source === 'makeup' ? languageStore.t('makeupCheckin') : languageStore.t('normalCheckin') }} · {{ record.count }}</span>
-            </div>
-            <p v-if="record.note">{{ record.note }}</p>
-          </div>
-        </div>
       </details>
+
+      <section class="tip-card app-card">
+        <span>⊙</span>
+        <p>{{ languageStore.t('checkinTip') }}</p>
+      </section>
     </section>
     <p v-else class="error">{{ languageStore.t('itemMissing') }}</p>
   </main>
+
+  <Teleport to="body">
+    <div
+      v-if="sharePickerOpen"
+      class="share-picker-backdrop"
+      :style="{ '--item-accent': accent }"
+      @click.self="closeSharePicker"
+    >
+      <section
+        class="share-picker-dialog"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="languageStore.t('shareTemplateTitle')"
+      >
+        <span class="share-picker-handle" aria-hidden="true" />
+        <div class="share-picker-heading">
+          <h2>{{ languageStore.t('shareTemplateTitle') }}</h2>
+          <p>{{ languageStore.t('shareTemplateSubtitle') }}</p>
+        </div>
+        <div class="share-template-grid">
+          <button
+            v-for="(option, index) in shareTemplateOptions"
+            :key="option.id"
+            class="share-template-option"
+            :class="[`is-${option.id}`, { 'is-selected': selectedShareTemplate === option.id }]"
+            type="button"
+            :disabled="sharing"
+            :aria-pressed="selectedShareTemplate === option.id"
+            @click="selectShareTemplate(option.id)"
+          >
+            <div class="share-template-preview" :class="`is-${option.id}`" aria-hidden="true">
+              <div v-if="option.id === 'zen'" class="share-preview-zen">
+                <span class="share-preview-orb" />
+                <div class="share-preview-zen-title">
+                  <span class="share-preview-title-line" />
+                  <span class="share-preview-subtitle-line" />
+                </div>
+                <span class="share-preview-zen-strip" />
+                <div class="share-preview-heatmap">
+                  <i
+                    v-for="cell in sharePreviewCellCount(option.id)"
+                    :key="cell"
+                    :class="`level-${sharePreviewLevel(cell, option.id)}`"
+                  />
+                </div>
+                <div class="share-preview-zen-footer">
+                  <span v-for="stat in sharePreviewStats" :key="stat" />
+                </div>
+                <div class="share-preview-zen-lines">
+                  <span />
+                  <span />
+                </div>
+              </div>
+              <div v-else class="share-preview-standard">
+                <div class="share-preview-head">
+                  <span class="share-preview-avatar" />
+                  <div class="share-preview-copy">
+                    <span class="share-preview-title-line" />
+                    <span class="share-preview-subtitle-line" />
+                  </div>
+                  <div v-if="option.id !== 'classic'" class="share-preview-statline is-mini">
+                    <span
+                      v-for="stat in option.id === 'dashboard' ? sharePreviewStats : 3"
+                      :key="stat"
+                    >
+                      <i />
+                      <em />
+                    </span>
+                  </div>
+                </div>
+                <div v-if="option.id === 'classic'" class="share-preview-statline">
+                  <span v-for="stat in sharePreviewStats" :key="stat">
+                    <i />
+                    <em />
+                  </span>
+                </div>
+                <div class="share-preview-heatmap">
+                  <i
+                    v-for="cell in sharePreviewCellCount(option.id)"
+                    :key="cell"
+                    :class="`level-${sharePreviewLevel(cell, option.id)}`"
+                  />
+                </div>
+                <div
+                  v-if="
+                    option.id === 'classic' || option.id === 'poster' || option.id === 'dashboard'
+                  "
+                  class="share-preview-classic-footer"
+                >
+                  <span v-for="block in sharePreviewFooterBlocks" :key="block" />
+                  <em />
+                </div>
+                <span v-if="option.id === 'dashboard'" class="share-preview-divider" />
+                <div class="share-preview-badges">
+                  <span v-for="badge in sharePreviewBadges" :key="badge">
+                    <i />
+                    <em />
+                  </span>
+                </div>
+              </div>
+            </div>
+            <span class="share-template-label">{{ shareTemplateName(option) }}</span>
+          </button>
+        </div>
+        <div class="share-picker-actions">
+          <button
+            class="share-picker-cancel"
+            type="button"
+            :disabled="sharing"
+            @click="closeSharePicker"
+          >
+            {{ languageStore.t('cancel') }}
+          </button>
+          <button
+            class="share-picker-confirm"
+            type="button"
+            :disabled="sharing"
+            @click="confirmShareTemplate"
+          >
+            {{ sharing ? languageStore.t('saveLoading') : languageStore.t('confirm') }}
+          </button>
+        </div>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .checkin-page {
-  width: min(980px, calc(100% - 32px));
-  min-height: 100vh;
+  display: block;
+  width: min(430px, 100%);
+  min-height: 100dvh;
   margin: 0 auto;
-  padding: 24px 0 48px;
+  background: var(--bg);
+  padding: 0 0 56px;
 }
 
 .checkin-topbar {
-  margin-bottom: 18px;
+  position: sticky;
+  z-index: 18;
+  top: 0;
+  min-height: 56px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  padding: 0 12px;
 }
 
-.flat-share-action {
+.checkin-page .app-card {
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-solid) 98%, transparent);
+  box-shadow: none;
+}
+
+:global(html[data-theme='dark']) .checkin-page .app-card {
+  background: rgba(18, 25, 35, 0.9);
+}
+
+:global(html[data-theme='dark']) .checkin-topbar {
+  background: var(--bg);
+}
+
+.share-link {
   border: 0;
+  border-radius: 12px;
   background: transparent;
-  color: var(--muted);
-  padding: 0;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.flat-share-action:hover {
   color: var(--text);
+  padding: 3px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
 }
 
-.flat-share-action:disabled {
+.share-link:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.52;
 }
 
-.checkin-stage {
+.checkin-stack {
   display: grid;
-  min-height: calc(100vh - 120px);
-  place-items: center;
-  align-content: center;
-  gap: 20px;
-  text-align: center;
+  gap: 9px;
+  padding: 8px 12px 40px;
 }
 
-.category-line {
-  margin: 0;
-  color: var(--muted);
-  font-weight: 700;
-}
-
-h1 {
-  max-width: 720px;
-  margin: 0;
-  font-size: clamp(30px, 7vw, 56px);
-  line-height: 1.05;
-}
-
-.checkin-meta {
+.habit-identity {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 14px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
 }
 
-.checkin-meta span {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 9px;
+.habit-identity :deep(.luma-icon-badge) {
+  border: 0;
+  border-radius: 17px;
+  background: color-mix(in srgb, var(--item-accent) 9%, transparent);
 }
 
-.checkin-compose {
+:global(html[data-theme='dark']) .habit-identity :deep(.luma-icon-badge) {
+  background: color-mix(in srgb, var(--item-accent) 17%, transparent);
+}
+
+.habit-identity :deep(.luma-icon-badge .iconfont) {
+  font-size: 40px;
+}
+
+.habit-identity-main {
   display: grid;
-  width: min(520px, 100%);
-  text-align: left;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
 }
 
-.checkin-compose .textarea {
-  min-height: 74px;
+.habit-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.success {
-  border: 1px solid rgba(34, 197, 94, 0.28);
-  border-radius: 8px;
-  background: rgba(34, 197, 94, 0.1);
-  color: var(--accent);
-  padding: 10px 12px;
+.habit-title-row h1 {
+  overflow: hidden;
+  flex: 1;
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 22px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.mini-heatmap {
-  width: min(840px, 100%);
-  padding: 14px;
+.habit-identity-main p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.checkin-panel {
-  width: min(840px, 100%);
-  padding: 14px;
-  text-align: left;
+.category-chip {
+  max-width: 112px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 14%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--item-accent) 10%, transparent);
+  color: var(--item-accent);
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.panel-heading {
+.checkin-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 11px 10px;
+}
+
+.checkin-stat {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  gap: 4px;
+}
+
+.checkin-stat > i {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  bottom: 4px;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.stat-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--item-accent);
+}
+
+.stat-value strong {
+  font-size: 14px;
+  line-height: 17px;
+  font-weight: 500;
+}
+
+.checkin-stat span {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 13px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heatmap-panel {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+}
+
+.heatmap-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 760;
+  gap: 10px;
 }
 
-.record-summary {
+.heatmap-heading strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 19px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heatmap-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.heatmap-legend span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 11px;
+}
+
+.heatmap-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.heatmap-panel :deep(.heatmap) {
+  --cell-column-gap: 3px;
+  --cell-row-gap: 4px;
+}
+
+.achievement-panel {
+  padding: 12px 14px;
+}
+
+.achievement-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   cursor: pointer;
   list-style: none;
 }
 
-.record-summary::-webkit-details-marker {
+.achievement-summary::-webkit-details-marker {
   display: none;
 }
 
-.record-summary::after {
-  color: var(--muted);
-  content: '+';
-  font-size: 18px;
-  font-weight: 520;
+.achievement-icon-wrap {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--item-accent) 10%, transparent);
+  color: var(--item-accent);
 }
 
-details[open] .record-summary::after {
-  content: '-';
+.achievement-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.achievement-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.achievement-copy em {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+  font-style: normal;
+}
+
+.fold-icon {
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform 160ms ease;
+}
+
+.achievement-panel[open] .fold-icon {
+  transform: rotate(-90deg);
 }
 
 .badge-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
+  padding-top: 10px;
 }
 
-.record-list {
-  display: grid;
-  gap: 8px;
+.achievement-panel > .muted {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
 }
 
-.record-row {
+.tip-card {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
 }
 
-.record-row:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.record-row div {
+.tip-card span {
   display: grid;
-  gap: 3px;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--item-accent) 9%, transparent);
+  color: var(--item-accent);
+  font-size: 13px;
+  line-height: 13px;
 }
 
-.record-row span,
-.record-row p {
+.tip-card p {
+  overflow: hidden;
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.record-row p {
-  max-width: 360px;
-  text-align: right;
+.share-picker-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(8, 9, 12, 0.63);
+  padding: 0;
 }
 
-@media (max-width: 640px) {
-  .checkin-compose {
-    grid-template-columns: 1fr;
+.share-picker-dialog {
+  display: grid;
+  width: min(430px, 100vw);
+  max-height: calc(100dvh - 36px);
+  overflow: auto;
+  border-radius: 31px 31px 0 0;
+  background: linear-gradient(160deg, #fffefe 0%, #fbf8ff 62%, #fffefe 100%);
+  color: #101827;
+  padding: 10px 16px max(22px, env(safe-area-inset-bottom));
+  box-shadow: none;
+}
+
+.share-picker-handle {
+  justify-self: center;
+  width: 39px;
+  height: 4px;
+  border-radius: 999px;
+  background: #b8b9c0;
+}
+
+.share-picker-heading {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+
+.share-picker-dialog h2 {
+  margin: 0;
+  color: inherit;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.share-picker-dialog p {
+  margin: 0;
+  color: #667085;
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 500;
+}
+
+.share-template-grid {
+  display: grid;
+  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.share-template-option {
+  display: grid;
+  grid-template-rows: 78px 18px;
+  gap: 3px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  height: 124px;
+  border: 1.5px solid color-mix(in srgb, var(--item-accent) 48%, #9eb8f0);
+  border-radius: 16px;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.96) 0%,
+      rgba(255, 255, 255, 0.96) 73%,
+      rgba(248, 249, 255, 0.94) 73%
+    ),
+    #fff;
+  padding: 8px 8px 9px;
+  color: #0f172a;
+  text-align: center;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.share-template-option.is-selected {
+  border-color: color-mix(in srgb, var(--item-accent) 82%, #16a34a);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--item-accent) 72%, #16a34a);
+}
+
+.share-template-option:active {
+  transform: scale(0.99);
+}
+
+.share-template-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.share-template-preview {
+  display: grid;
+  align-content: start;
+  overflow: visible;
+  width: 100%;
+  height: 78px;
+  min-height: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  padding: 0;
+}
+
+.share-template-preview.is-classic {
+  height: 78px;
+}
+
+.share-template-preview.is-poster {
+  height: 78px;
+}
+
+.share-template-preview.is-zen {
+  height: 78px;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.share-template-preview.is-dashboard {
+  height: 78px;
+}
+
+.share-template-kicker {
+  color: #687084;
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 500;
+}
+
+.share-template-label {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-preview-standard,
+.share-preview-zen {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  gap: 2px;
+}
+
+.share-preview-zen {
+  justify-items: center;
+  gap: 1.2px;
+}
+
+.share-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.share-preview-avatar {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 28%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--item-accent) 12%, transparent);
+}
+
+.share-preview-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.share-preview-title-line,
+.share-preview-subtitle-line {
+  display: block;
+  height: 4px;
+  border-radius: 3px;
+}
+
+.share-preview-title-line {
+  width: 54px;
+  background: var(--item-accent);
+}
+
+.share-preview-subtitle-line {
+  width: 36px;
+  height: 2.5px;
+  background: color-mix(in srgb, var(--item-accent) 18%, transparent);
+}
+
+.share-template-preview.is-poster .share-preview-title-line {
+  width: 66px;
+  height: 6px;
+  background: var(--item-accent);
+}
+
+.share-template-preview.is-poster .share-preview-subtitle-line {
+  width: 48px;
+  height: 2.5px;
+}
+
+.share-template-preview.is-poster .share-preview-head {
+  align-items: stretch;
+}
+
+.share-template-preview.is-poster .share-preview-avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.share-template-preview.is-poster .share-preview-statline.is-mini {
+  align-self: stretch;
+  width: 66px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 24%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--item-accent) 5%, transparent);
+  padding: 3px 4px;
+}
+
+.share-template-preview.is-poster .share-preview-statline.is-mini i {
+  width: 12px;
+  height: 3px;
+}
+
+.share-template-preview.is-poster .share-preview-statline.is-mini em {
+  width: 10px;
+}
+
+.share-template-preview.is-dashboard .share-preview-title-line {
+  width: 38px;
+  height: 5px;
+}
+
+.share-template-preview.is-dashboard .share-preview-subtitle-line {
+  width: 30px;
+  height: 2.5px;
+}
+
+.share-template-preview.is-dashboard .share-preview-head {
+  align-items: stretch;
+  gap: 4px;
+}
+
+.share-template-preview.is-dashboard .share-preview-avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.share-template-preview.is-dashboard .share-preview-copy {
+  flex: 0 0 38px;
+  align-content: center;
+}
+
+.share-template-preview.is-dashboard .share-preview-statline.is-mini {
+  display: grid;
+  flex: 1;
+  align-self: stretch;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  width: auto;
+}
+
+.share-template-preview.is-dashboard .share-preview-statline.is-mini span {
+  width: auto;
+  min-width: 0;
+  height: 18px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 24%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--item-accent) 6%, transparent);
+}
+
+.share-template-preview.is-dashboard .share-preview-statline.is-mini i,
+.share-template-preview.is-dashboard .share-preview-statline.is-mini em {
+  display: none;
+}
+
+.share-preview-orb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 32%, transparent);
+  background: color-mix(in srgb, var(--item-accent) 10%, transparent);
+}
+
+.share-template-preview.is-zen .share-preview-orb {
+  width: 11px;
+  height: 11px;
+  border-radius: 4px;
+}
+
+.share-preview-zen-title {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+}
+
+.share-template-preview.is-zen .share-preview-title-line {
+  width: 42px;
+  height: 4px;
+}
+
+.share-template-preview.is-zen .share-preview-subtitle-line {
+  width: 28px;
+  height: 2px;
+}
+
+.share-preview-zen-strip {
+  display: block;
+  width: 88%;
+  height: 7px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 24%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--item-accent) 6%, transparent);
+}
+
+.share-preview-zen-footer {
+  display: grid;
+  width: 86%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.share-preview-zen-footer span {
+  height: 5px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 24%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--item-accent) 7%, #fff);
+}
+
+.share-preview-zen-lines {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+}
+
+.share-preview-zen-lines span {
+  display: block;
+  width: 32px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--item-accent) 18%, #dbe6ff);
+}
+
+.share-preview-zen-lines span:first-child {
+  width: 38px;
+}
+
+.share-preview-statline {
+  display: flex;
+  justify-content: space-evenly;
+  gap: 2px;
+  width: 100%;
+}
+
+.share-preview-statline.is-mini {
+  width: 48px;
+}
+
+.share-preview-statline span {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.share-preview-statline i,
+.share-preview-statline em {
+  display: block;
+  border-radius: 2px;
+}
+
+.share-preview-statline i {
+  width: 15px;
+  height: 3.5px;
+  background: color-mix(in srgb, var(--item-accent) 78%, transparent);
+}
+
+.share-preview-statline em {
+  width: 11px;
+  height: 2px;
+  background: color-mix(in srgb, var(--item-accent) 14%, #cbd5e1);
+}
+
+.share-preview-heatmap {
+  display: grid;
+  align-content: start;
+  justify-content: stretch;
+  gap: 1.4px;
+  min-height: 0;
+  width: 100%;
+  margin-top: 0;
+}
+
+.share-template-preview.is-classic .share-preview-heatmap,
+.share-template-preview.is-zen .share-preview-heatmap {
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+}
+
+.share-template-preview.is-poster .share-preview-heatmap {
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 1.4px;
+}
+
+.share-template-preview.is-dashboard .share-preview-heatmap {
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 1.4px;
+}
+
+.share-preview-heatmap i {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--item-accent) 12%, #eef4ff);
+}
+
+.share-preview-heatmap i.level-1 {
+  background: color-mix(in srgb, var(--item-accent) 28%, #eef4ff);
+}
+
+.share-preview-heatmap i.level-2 {
+  background: color-mix(in srgb, var(--item-accent) 54%, #eef4ff);
+}
+
+.share-preview-heatmap i.level-3 {
+  background: color-mix(in srgb, var(--item-accent) 84%, #eef4ff);
+}
+
+.share-preview-classic-footer {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1.5px;
+  margin-top: 1px;
+  padding: 0 13px;
+}
+
+.share-preview-classic-footer span {
+  height: 6px;
+  border: 1px solid color-mix(in srgb, var(--item-accent) 24%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--item-accent) 8%, #fff);
+}
+
+.share-preview-classic-footer em {
+  display: block;
+  width: 18px;
+  height: 2px;
+  grid-column: 1 / 2;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--item-accent) 16%, #dbe6ff);
+}
+
+.share-preview-divider {
+  display: none;
+  width: 100%;
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.share-preview-badges {
+  display: none;
+  justify-content: space-evenly;
+  gap: 3px;
+  width: 100%;
+}
+
+.share-preview-badges span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.share-preview-badges i {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--item-accent) 72%, transparent);
+}
+
+.share-preview-badges em {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+  background: #cbd5e1;
+}
+
+.share-picker-cancel {
+  border: 0;
+  background: transparent;
+  color: #667085;
+}
+
+.share-picker-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.share-picker-cancel,
+.share-picker-confirm {
+  min-height: 38px;
+  border-radius: 14px;
+  padding: 0 10px;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 700;
+}
+
+.share-picker-confirm {
+  justify-self: center;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--item-accent) 82%, #16a34a);
+}
+
+.share-picker-cancel:disabled,
+.share-picker-confirm:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+:global(html[data-theme='dark']) .share-picker-backdrop {
+  background: rgba(2, 6, 12, 0.68);
+}
+
+:global(html[data-theme='dark']) .share-picker-dialog {
+  background: linear-gradient(160deg, #151b25 0%, #151923 100%);
+  color: #eef3f8;
+}
+
+:global(html[data-theme='dark']) .share-picker-dialog p,
+:global(html[data-theme='dark']) .share-template-kicker,
+:global(html[data-theme='dark']) .share-picker-cancel {
+  color: #94a3b8;
+}
+
+:global(html[data-theme='dark']) .share-template-option {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(20, 27, 38, 0.95) 0%,
+      rgba(20, 27, 38, 0.95) 73%,
+      rgba(17, 24, 34, 0.96) 73%
+    ),
+    #111923;
+  color: #eef3f8;
+}
+
+:global(html[data-theme='dark']) .share-template-preview {
+  background: transparent;
+}
+
+:global(html[data-theme='dark']) .share-template-preview.is-zen {
+  background: transparent;
+}
+
+:global(html[data-theme='dark']) .share-template-label {
+  color: #eef3f8;
+}
+
+:global(html[data-theme='dark']) .share-preview-statline em,
+:global(html[data-theme='dark']) .share-preview-badges em {
+  background: #475569;
+}
+
+@media (max-width: 520px) {
+  .checkin-stats {
+    padding-right: 8px;
+    padding-left: 8px;
   }
 
-  .record-row {
-    flex-direction: column;
+  .category-chip {
+    max-width: 96px;
   }
 
-  .record-row p {
-    text-align: left;
+  .heatmap-heading {
+    align-items: center;
+    flex-direction: row;
   }
 }
 </style>

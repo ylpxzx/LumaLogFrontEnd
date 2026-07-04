@@ -19,10 +19,10 @@ export function heatmapLevelColor(theme: string, level: number) {
   if (level === 0) {
     return 'var(--square-empty)'
   }
-  return mixWithSurface(color, alpha)
+  return rgbaFromHex(color, alpha)
 }
 
-function mixWithSurface(hex: string, alpha: number) {
+export function rgbaFromHex(hex: string, alpha: number) {
   const rgb = hex
     .replace('#', '')
     .match(/.{1,2}/g)

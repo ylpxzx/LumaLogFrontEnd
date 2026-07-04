@@ -2,11 +2,10 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { createItem } from '@/api/items'
-import { listCategories } from '@/api/categories'
+import { createCategory, listCategories } from '@/api/categories'
 import ItemForm from '@/components/ItemForm.vue'
-import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useLanguageStore } from '@/stores/language'
-import type { Category, ItemPayload } from '@/types'
+import type { Category, CategoryPayload, ItemPayload } from '@/types'
 
 const router = useRouter()
 const languageStore = useLanguageStore()
@@ -24,37 +23,58 @@ async function submit(payload: ItemPayload) {
   try {
     await createItem(payload)
     router.push('/')
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('createFailed')
+  } catch {
+    error.value = languageStore.t('createFailed')
   } finally {
     loading.value = false
   }
+}
+
+async function handleCreateCategory(payload: CategoryPayload) {
+  const category = await createCategory(payload)
+  categories.value = [...categories.value, category]
+  return category
 }
 
 onMounted(load)
 </script>
 
 <template>
-  <main class="form-page">
-    <header class="topbar">
-      <div class="title-block">
-        <h1>{{ languageStore.t('createItemTitle') }}</h1>
-        <p>{{ languageStore.t('createItemSubtitle') }}</p>
-      </div>
-      <div class="topbar-actions">
-        <!-- <ThemeToggle /> -->
-        <RouterLink class="button secondary" to="/">{{ languageStore.t('backHome') }}</RouterLink>
-      </div>
+  <main class="form-page editor-page">
+    <header class="screen-topbar editor-screen-topbar">
+      <RouterLink class="back-link screen-topbar-left" to="/">←</RouterLink>
+      <h1 class="screen-topbar-title">{{ languageStore.t('createItemTitle') }}</h1>
     </header>
 
-    <section class="form-panel">
+    <section class="editor-stack">
       <p v-if="error" class="error">{{ error }}</p>
       <ItemForm
         :categories="categories"
         :loading="loading"
         :submit-label="languageStore.t('createItemSubmit')"
+        :create-category="handleCreateCategory"
         @submit="submit"
       />
     </section>
   </main>
 </template>
+
+<style scoped>
+.editor-page {
+  padding-top: 18px;
+}
+
+.editor-screen-topbar {
+  position: sticky;
+  z-index: 18;
+  top: 0;
+  margin-bottom: 12px;
+  background: var(--bg);
+  padding: 8px 0;
+}
+
+.editor-stack {
+  display: grid;
+  gap: 10px;
+}
+</style>

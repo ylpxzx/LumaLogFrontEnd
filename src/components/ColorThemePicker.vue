@@ -59,10 +59,13 @@ function colorLabel(theme: string) {
   align-items: center;
   gap: 7px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface);
   color: var(--muted);
   padding: 6px 10px;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
 }
 
 .color-swatch::before {
@@ -75,7 +78,7 @@ function colorLabel(theme: string) {
 
 .color-swatch.active {
   border-color: var(--swatch);
+  background: color-mix(in srgb, var(--swatch) 9%, var(--surface));
   color: var(--text);
-  box-shadow: var(--focus);
 }
 </style>

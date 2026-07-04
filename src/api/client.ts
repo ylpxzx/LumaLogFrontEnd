@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.31.215:8080/api'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.30.118:8080/api'
 
 export class ApiError extends Error {
   status: number

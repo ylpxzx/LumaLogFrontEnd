@@ -2,12 +2,11 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { archiveItem, deleteItem, fetchItem, unarchiveItem, updateItem } from '@/api/items'
-import { listCategories } from '@/api/categories'
+import { createCategory, listCategories } from '@/api/categories'
 import DeleteConfirmDialog from '@/components/DeleteConfirmDialog.vue'
 import ItemForm from '@/components/ItemForm.vue'
-import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useLanguageStore } from '@/stores/language'
-import type { Category, Item, ItemPayload } from '@/types'
+import type { Category, CategoryPayload, HeatmapDay, Item, ItemPayload } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,6 +14,7 @@ const languageStore = useLanguageStore()
 const itemId = Number(route.params.id)
 
 const item = ref<Item | null>(null)
+const heatmap = ref<HeatmapDay[]>([])
 const categories = ref<Category[]>([])
 const loading = ref(true)
 const saving = ref(false)
@@ -29,12 +29,19 @@ async function load() {
   try {
     const [entry, cats] = await Promise.all([fetchItem(itemId), listCategories()])
     item.value = entry.item
+    heatmap.value = entry.heatmap
     categories.value = cats
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('itemLoadFailed')
+  } catch {
+    error.value = languageStore.t('itemLoadFailed')
   } finally {
     loading.value = false
   }
+}
+
+async function handleCreateCategory(payload: CategoryPayload) {
+  const category = await createCategory(payload)
+  categories.value = [...categories.value, category]
+  return category
 }
 
 async function submit(payload: ItemPayload) {
@@ -43,8 +50,8 @@ async function submit(payload: ItemPayload) {
   try {
     item.value = await updateItem(itemId, payload)
     router.push('/')
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('saveFailed')
+  } catch {
+    error.value = languageStore.t('saveFailed')
   } finally {
     saving.value = false
   }
@@ -56,8 +63,8 @@ async function confirmDelete() {
   try {
     await deleteItem(itemId)
     router.push('/')
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('deleteFailed')
+  } catch {
+    error.value = languageStore.t('deleteFailed')
   } finally {
     deleting.value = false
   }
@@ -67,17 +74,14 @@ async function toggleArchive() {
   if (!item.value) {
     return
   }
+  const shouldUnarchive = Boolean(item.value.archived_at)
   archiving.value = true
   error.value = ''
   try {
-    item.value = item.value.archived_at ? await unarchiveItem(itemId) : await archiveItem(itemId)
+    item.value = shouldUnarchive ? await unarchiveItem(itemId) : await archiveItem(itemId)
     router.push(item.value.archived_at ? '/settings' : '/')
-  } catch (err) {
-    error.value = err instanceof Error
-      ? err.message
-      : item.value.archived_at
-        ? languageStore.t('unarchiveFailed')
-        : languageStore.t('archiveFailed')
+  } catch {
+    error.value = languageStore.t(shouldUnarchive ? 'unarchiveFailed' : 'archiveFailed')
   } finally {
     archiving.value = false
   }
@@ -87,37 +91,28 @@ onMounted(load)
 </script>
 
 <template>
-  <main class="form-page">
-    <header class="topbar">
-      <div class="title-block">
-        <h1>{{ languageStore.t('editItemTitle') }}</h1>
-        <p>{{ languageStore.t('editItemSubtitle') }}</p>
-      </div>
-      <div class="topbar-actions">
-        <!-- <ThemeToggle /> -->
-        <RouterLink class="button secondary" to="/">{{ languageStore.t('backHome') }}</RouterLink>
-      </div>
+  <main class="form-page editor-page">
+    <header class="screen-topbar editor-screen-topbar">
+      <RouterLink class="back-link screen-topbar-left" to="/">←</RouterLink>
+      <h1 class="screen-topbar-title">{{ languageStore.t('editItemTitle') }}</h1>
     </header>
 
     <div v-if="loading" class="loading">{{ languageStore.t('loading') }}</div>
-    <section v-else class="form-panel">
+    <section v-else class="editor-stack">
       <p v-if="error" class="error">{{ error }}</p>
       <ItemForm
         :item="item"
         :categories="categories"
+        :heatmap="heatmap"
         :loading="saving"
-        :submit-label="languageStore.t('saveChanges')"
+        :submit-label="languageStore.t('save')"
+        :is-editing="true"
+        :archived="Boolean(item?.archived_at)"
+        :create-category="handleCreateCategory"
         @submit="submit"
+        @archive="toggleArchive"
+        @delete="confirmOpen = true"
       />
-
-      <div class="danger-zone">
-        <button class="button secondary" type="button" :disabled="archiving" @click="toggleArchive">
-          {{ item?.archived_at ? languageStore.t('unarchive') : languageStore.t('archive') }}
-        </button>
-        <button class="button danger" type="button" @click="confirmOpen = true">
-          {{ languageStore.t('deleteItem') }}
-        </button>
-      </div>
     </section>
 
     <DeleteConfirmDialog
@@ -130,3 +125,23 @@ onMounted(load)
     />
   </main>
 </template>
+
+<style scoped>
+.editor-page {
+  padding-top: 18px;
+}
+
+.editor-screen-topbar {
+  position: sticky;
+  z-index: 18;
+  top: 0;
+  margin-bottom: 12px;
+  background: var(--bg);
+  padding: 8px 0;
+}
+
+.editor-stack {
+  display: grid;
+  gap: 10px;
+}
+</style>

@@ -19,8 +19,8 @@ async function submit() {
     const response = await authStore.register(email.value, password.value, displayName.value)
     languageStore.setLanguage(response.user.language_preference)
     router.push('/')
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('registerFailed')
+  } catch {
+    error.value = languageStore.t('registerFailed')
   }
 }
 </script>

@@ -11,6 +11,11 @@ const props = defineProps<{
   interactive?: boolean
   clickableDates?: string[]
   pendingDates?: string[]
+  selectedDates?: string[]
+  makeupDates?: string[]
+  dayLabels?: Record<string, string>
+  showMonths?: boolean
+  maxDays?: number
 }>()
 
 const emit = defineEmits<{
@@ -28,16 +33,19 @@ let mediaQuery: MediaQueryList | null = null
 const monthNames = computed(() => (languageStore.preference === 'en' ? enMonthNames : zhMonthNames))
 
 const visibleValues = computed(() => {
-  if (!isCompact.value || props.values.length <= compactDayCount) {
+  const limit = props.maxDays ?? (isCompact.value ? compactDayCount : 0)
+  if (!limit || props.values.length <= limit) {
     return props.values
   }
 
-  return props.values.slice(-compactDayCount)
+  return props.values.slice(-limit)
 })
 
 const valueMap = computed(() => new Map(visibleValues.value.map((day) => [day.date, day])))
 const clickableDateSet = computed(() => new Set(props.clickableDates ?? []))
 const pendingDateSet = computed(() => new Set(props.pendingDates ?? []))
+const selectedDateSet = computed(() => new Set(props.selectedDates ?? []))
+const makeupDateSet = computed(() => new Set(props.makeupDates ?? []))
 const selectedDayText = computed(() => {
   if (!selectedDay.value) {
     return ''
@@ -77,7 +85,10 @@ const weeks = computed(() => {
       const date = new Date(cursor)
       date.setDate(cursor.getDate() + offset)
       const key = formatDate(date)
-      week.push(valueMap.value.get(key) ?? null)
+      week.push(
+        valueMap.value.get(key) ??
+          (date < first ? { date: key, count: 0, level: 0, completed: false } : null),
+      )
     }
     result.push(week)
   }
@@ -149,6 +160,10 @@ function handleDayClick(day: HeatmapDay | null) {
 }
 
 function dayText(day: HeatmapDay) {
+  const customLabel = props.dayLabels?.[day.date]
+  if (customLabel) {
+    return customLabel
+  }
   return languageStore.t('heatmapTooltip', {
     date: formatFullDisplayDate(day.date, languageStore.preference),
     count: day.count,
@@ -169,7 +184,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="heatmap" :style="{ '--columns': weeks.length }">
-    <div class="heatmap-months">
+    <div v-if="showMonths !== false" class="heatmap-months">
       <span
         v-for="month in monthLabels"
         :key="`${month.label}-${month.index}`"
@@ -192,7 +207,8 @@ onBeforeUnmount(() => {
               clickable: canClick(day),
               disabled: interactive && day && !canClick(day),
               pending: day && pendingDateSet.has(day.date),
-              selected: day && selectedDay?.date === day.date,
+              selected: day && (selectedDay?.date === day.date || selectedDateSet.has(day.date)),
+              makeup: day && makeupDateSet.has(day.date),
             }"
             :title="day ? dayText(day) : ''"
             :style="{ backgroundColor: day ? heatmapLevelColor(colorTheme, day.level) : 'transparent' }"
@@ -212,20 +228,31 @@ onBeforeUnmount(() => {
 .heatmap {
   width: 100%;
   padding-bottom: 2px;
-  --cell-gap: 3px;
+  --cell-column-gap: 3px;
+  --cell-row-gap: 4px;
 }
 
 .heatmap-months {
   display: grid;
   grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
-  gap: var(--cell-gap);
+  align-items: center;
+  column-gap: var(--cell-column-gap);
   width: 100%;
-  color: var(--muted);
-  font-size: 11px;
+  min-height: 14px;
+  margin-bottom: 7px;
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
 }
 
 .heatmap-months span {
+  min-width: max-content;
   white-space: nowrap;
+}
+
+:global(html[data-theme='dark']) .heatmap-months {
+  color: rgba(226, 232, 240, 0.78);
 }
 
 .heatmap-content {
@@ -237,17 +264,19 @@ onBeforeUnmount(() => {
   grid-auto-flow: column;
   grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
   grid-template-rows: repeat(7, minmax(0, 1fr));
-  gap: var(--cell-gap);
+  column-gap: var(--cell-column-gap);
+  row-gap: var(--cell-row-gap);
   width: 100%;
   aspect-ratio: var(--columns) / 7;
 }
 
 .heatmap-square {
+  position: relative;
   width: 100%;
   height: 100%;
   min-width: 0;
   border-radius: 3px;
-  outline: 1px solid rgba(0, 0, 0, 0.02);
+  outline: 0;
 }
 
 .heatmap-square.inspectable {
@@ -257,11 +286,12 @@ onBeforeUnmount(() => {
 .heatmap-square.inspectable:hover,
 .heatmap-square.selected {
   outline: 1px solid color-mix(in srgb, var(--accent) 68%, transparent);
+  outline-offset: 1px;
 }
 
 .heatmap-square.clickable {
   cursor: pointer;
-  outline: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
   transition:
     transform 140ms ease,
     outline-color 140ms ease,
@@ -287,11 +317,25 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
+.heatmap-square.makeup::after {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 24%;
+  height: 24%;
+  min-width: 3px;
+  min-height: 3px;
+  border-radius: 999px;
+  background: var(--surface-solid);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 72%, transparent);
+  content: '';
+}
+
 .heatmap-selection {
   display: inline-flex;
   margin-top: 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface-soft);
   color: var(--muted);
   padding: 6px 8px;

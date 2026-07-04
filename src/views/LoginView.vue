@@ -19,8 +19,8 @@ async function submit() {
     const response = await authStore.login(email.value, password.value)
     languageStore.setLanguage(response.user.language_preference)
     router.push((route.query.redirect as string | undefined) ?? '/')
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : languageStore.t('loginFailed')
+  } catch {
+    error.value = languageStore.t('loginFailed')
   }
 }
 </script>
